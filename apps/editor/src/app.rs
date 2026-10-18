@@ -933,10 +933,18 @@ impl Editor {
             shape.extra.set("isDrawingObject", Some("true"));
         }
         self.checkpoint();
-        let layer = &mut self.timeline_mut().layers[l];
-        if layer.keyframe_at(f).is_none() {
-            layer.insert_blank_keyframe(f);
+        let tl = self.timeline_mut();
+        if tl.layers[l].keyframe_at(f).is_none() {
+            tl.layers[l].insert_blank_keyframe(f);
         }
+        // A parented layer's keyframe holds its drawings in its parent's object's space.
+        if let Some(into) = minnamate_core::layer_motion::parenting(tl, l, f).inverse().filter(|m| *m != Matrix::IDENTITY) {
+            let mut el = Element::Shape(shape);
+            transform::transform(&mut el, &into);
+            let Element::Shape(s) = el else { unreachable!() };
+            shape = s;
+        }
+        let layer = &mut tl.layers[l];
         if let Some(k) = layer.keyframe_at(f) {
             draw::add(&mut layer.frames[k], shape);
         }

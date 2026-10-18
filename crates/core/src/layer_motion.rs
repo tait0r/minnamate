@@ -13,9 +13,20 @@ const RIG_DEPTH: u32 = 8;
 
 /// What keyframe `k` of layer `l` shows `offset` frames in: the instance its classic tween
 /// puts there (along the layer's motion guide, if it has one), or None to show the keyframe
-/// as is; and what layer parenting adds, the parent's motion since the keyframe began.
+/// as is; and what layer parenting adds, the parent's object as it shows then.
 pub(crate) fn motion(tl: &Timeline, l: usize, k: usize, offset: u32) -> (Option<Instance>, Matrix) {
     motion_at(tl, l, k, offset, 0)
+}
+
+/// What parenting maps layer `l`'s objects at `frame` through, from the space its keyframe
+/// holds them in to the timeline's.
+pub fn parenting(tl: &Timeline, l: usize, frame: u32) -> Matrix {
+    tl.layers.get(l).and_then(|layer| layer.keyframe_at(frame)).map_or(Matrix::IDENTITY, |k| rig(tl, l, k, frame, 0))
+}
+
+/// That for keyframe `k` of layer `l` where it starts.
+pub(crate) fn parenting_at_start(tl: &Timeline, l: usize, k: usize) -> Matrix {
+    tl.layers.get(l).and_then(|layer| layer.frames.get(k)).map_or(Matrix::IDENTITY, |key| rig(tl, l, k, key.index, 0))
 }
 
 /// Instance `r` of `tl` as it shows at `frame`: tweened, on its guide, after its parent.
@@ -28,20 +39,24 @@ pub fn shown_instance(tl: &Timeline, r: ElementRef, frame: u32) -> Option<Instan
     Some(inst)
 }
 
-/// After F6, which copies what a keyframe holds: each keyframe split off a guided tween or a
-/// parented layer holds what showed there instead (at its own start parenting adds nothing),
-/// so nothing jumps. `before` is the timeline before the split; the keyframes starting where
-/// none did are the new ones.
+/// After F6, which copies what a keyframe holds: each keyframe split off a tween (guided, or
+/// on a parented layer) holds what showed there instead, in the space its own parenting
+/// holds it in, so nothing jumps. `before` is the timeline before the split; the keyframes
+/// starting where none did are the new ones.
 pub fn keep_shown(before: &Timeline, after: &mut Timeline) {
-    for (l, layer) in after.layers.iter_mut().enumerate() {
+    for l in 0..after.layers.len() {
         let Some(old) = before.layers.get(l) else { continue };
-        for key in layer.frames.iter_mut().filter(|k| !old.frames.iter().any(|o| o.index == k.index)) {
-            let Some(o) = old.keyframe_at(key.index) else { continue };
-            let (tweened, rig) = motion(before, l, o, key.index - old.frames[o].index);
+        let new: Vec<usize> = (0..after.layers[l].frames.len()).filter(|&k| !old.frames.iter().any(|o| o.index == after.layers[l].frames[k].index)).collect();
+        for k in new {
+            let index = after.layers[l].frames[k].index;
+            let Some(o) = old.keyframe_at(index) else { continue };
+            let (tweened, was) = motion(before, l, o, index - old.frames[o].index);
+            let Some(into) = parenting_at_start(after, l, k).inverse() else { continue };
+            let key = &mut after.layers[l].frames[k];
             if let (Some(shown), [Element::Instance(copy)]) = (&tweened, &mut key.elements[..]) {
-                copy.matrix = rig * shown.matrix;
-            } else if rig != Matrix::IDENTITY {
-                key.elements.iter_mut().for_each(|el| crate::transform::transform(el, &rig));
+                copy.matrix = into * was * shown.matrix;
+            } else if into * was != Matrix::IDENTITY {
+                key.elements.iter_mut().for_each(|el| crate::transform::transform(el, &(into * was)));
             }
         }
     }
@@ -108,20 +123,17 @@ fn place(inst: &mut Instance, to: Point, turn: f32) {
     inst.matrix.ty += to.1 - at.1;
 }
 
-/// What parenting adds to keyframe `k` of layer `l` at `frame`: the parent's object's motion
-/// since the keyframe began, the keyframe holding where its objects were then. The whole
-/// transform carries over, as Animate 22 does with Propagate Scale, Skew and Flip on.
+/// What parenting adds to keyframe `k` of layer `l` at `frame`: the parent's object as it
+/// shows then. A parented keyframe holds its objects in that object's space, as Animate
+/// saves them (a neck's keyframes at the body's matrix times their own). The whole transform
+/// carries over, as Animate 22 does with Propagate Scale, Skew and Flip on.
 // ponytail: Animate's position-and-rotation-only parenting (those toggles off) isn't modelled.
-// The stage edits keyframes as stored, so on a parented layer past a keyframe's start (its
-// parent moved since) a drag, a new drawing or a shape's selection marks are off by this
-// matrix; map stage edits through its inverse when that matters.
+// New drawings go into the parent's space (Editor::add_shape); other stage edits (drags, paste,
+// the Text tool, a shape's selection marks) still work in the timeline's, and are off by this
+// matrix on a parented layer. Map them through its inverse when that matters.
 fn rig(tl: &Timeline, l: usize, k: usize, frame: u32, depth: u32) -> Matrix {
     let Some(p) = tl.rig_parent(l, k).filter(|_| depth < RIG_DEPTH) else { return Matrix::IDENTITY };
-    let start = tl.layers[l].frames[k].index;
-    match (object(tl, p, frame, depth + 1), object(tl, p, start, depth + 1).and_then(|m| m.inverse())) {
-        (Some(now), Some(then)) => now * then,
-        _ => Matrix::IDENTITY,
-    }
+    object(tl, p, frame, depth + 1).unwrap_or(Matrix::IDENTITY)
 }
 
 /// Where layer `p`'s top object shows at `frame`: its transform, tweened, guided and parented.
@@ -358,19 +370,44 @@ mod tests {
         assert!(near(hand(&doc, 5), (125.0 + 50.0 * eighth.cos(), 100.0 + 50.0 * eighth.sin(), eighth)), "{:?}", hand(&doc, 5));
         assert!(near(hand(&doc, 10), (150.0, 150.0, PI / 2.0)), "{:?}", hand(&doc, 10));
 
-        // A keyframe holds where its objects were when it began: from frame 5 on, the hand
-        // drawn at (200, 100) moves with the arm's motion since frame 5.
+        // Parenting moved the hand into the arm's space: 50 px out along it.
+        let Element::Instance(held) = &doc.scenes[0].layers[1].frames[0].elements[0] else { panic!() };
+        assert!(near((held.matrix.tx, held.matrix.ty, 0.0), (50.0, 0.0, 0.0)), "{:?}", held.matrix);
+
+        // A keyframe holds its objects in the arm's space: from frame 5 on, the hand 60 px out along it.
         let hand_layer = &mut doc.scenes[0].layers[1];
         hand_layer.insert_blank_keyframe(5);
-        hand_layer.frames[1].elements = vec![instance(200.0, 100.0, 0.0)];
-        assert!(near(hand(&doc, 5), (200.0, 100.0, 0.0)), "{:?}", hand(&doc, 5));
-        let (now, then) = (Matrix::translate(150.0, 100.0) * Matrix::rotate(PI / 2.0), Matrix::translate(125.0, 100.0) * Matrix::rotate(eighth));
-        let want = now * then.inverse().unwrap() * Matrix::translate(200.0, 100.0);
-        assert!(near(hand(&doc, 10), (want.tx, want.ty, PI / 2.0 - eighth)), "{:?} vs {want:?}", hand(&doc, 10));
+        hand_layer.frames[1].elements = vec![instance(60.0, 0.0, 0.0)];
+        assert!(near(hand(&doc, 5), (125.0 + 60.0 * eighth.cos(), 100.0 + 60.0 * eighth.sin(), eighth)), "{:?}", hand(&doc, 5));
+        assert!(near(hand(&doc, 10), (150.0, 160.0, PI / 2.0)), "{:?}", hand(&doc, 10));
 
-        // Removing the parent: the hand stays where its keyframes put it.
+        // Removing the parent: each keyframe stays where it showed when it began.
         assert!(doc.scenes[0].set_rig_parent(1, None));
-        assert!(near(hand(&doc, 10), (200.0, 100.0, 0.0)), "{:?}", hand(&doc, 10));
+        assert!(near(hand(&doc, 0), (150.0, 100.0, 0.0)), "{:?}", hand(&doc, 0));
+        let at5 = (125.0 + 60.0 * eighth.cos(), 100.0 + 60.0 * eighth.sin(), eighth);
+        assert!(near(hand(&doc, 5), at5) && near(hand(&doc, 10), at5), "{:?}", hand(&doc, 10));
+    }
+
+    #[test]
+    fn a_parented_keyframe_holds_its_objects_in_its_parents_space() {
+        // A body and a neck as an Animate-saved character keeps them: on its parented keyframe the
+        // neck sits at (110.55, -37.2) in the body's space; unparented, a frame on, it's at
+        // (127.5, 183.9), where the body (at (16.4, 221.1), scaled) puts the other.
+        let body = |tx, ty, a, d| {
+            let Element::Instance(mut i) = instance(0.0, 0.0, 0.0) else { unreachable!() };
+            i.matrix = Matrix { a, b: 0.0, c: 0.0, d, tx, ty };
+            Element::Instance(i)
+        };
+        let bod = layer("Bod", vec![keyframe(0, 1, Tween::None, vec![body(15.8, 224.75, 1.00705, 0.98737)]), keyframe(1, 2, Tween::None, vec![body(16.4, 221.1, 1.0033, 0.99481)])]);
+        let neck = layer("Neck", vec![keyframe(0, 1, Tween::None, vec![instance(110.55, -37.2, 0.0)]), keyframe(1, 2, Tween::None, vec![instance(127.5, 183.9, 0.0)])]);
+        let mut doc = doc(vec![neck, bod]);
+        doc.scenes[0].layers[1].extra.set("layerRiggingIndex", Some("2"));
+        doc.scenes[0].layers[0].frames[0].extra.set("parentLayerIndex", Some("2"));
+        assert_eq!(doc.scenes[0].rig_parent(0, 0), Some(1));
+        let (x, y, _) = at(&doc, 0, 0);
+        assert!((x - (15.8 + 1.00705 * 110.55)).abs() < 0.05 && (y - (224.75 - 0.98737 * 37.2)).abs() < 0.05, "{x}, {y}");
+        assert!((x - 127.5).abs() < 1.0 && (y - 183.9).abs() < 5.0, "beside the unparented keyframe: {x}, {y}");
+        assert!(near(at(&doc, 0, 1), (127.5, 183.9, 0.0)), "{:?}", at(&doc, 0, 1));
     }
 
     #[test]

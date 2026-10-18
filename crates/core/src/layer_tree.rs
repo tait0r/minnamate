@@ -242,8 +242,9 @@ impl Timeline {
     }
 
     /// The parenting view: every keyframe of layer `l` follows `parent`'s object from here on, or
-    /// nothing. Returns false, changing nothing, unless both are normal layers and `parent`
-    /// doesn't follow `l` already (that would loop).
+    /// nothing, its objects moved into the space that holds them so that where each keyframe
+    /// starts nothing jumps. Returns false, changing nothing, unless both are normal layers and
+    /// `parent` doesn't follow `l` already (that would loop).
     // ponytail: Animate can give each keyframe span a parent of its own; the view sets the whole layer's.
     pub fn set_rig_parent(&mut self, l: usize, parent: Option<usize>) -> bool {
         let normal = |i: usize| self.layers.get(i).is_some_and(|x| x.kind == LayerKind::Normal);
@@ -251,8 +252,17 @@ impl Timeline {
             return false;
         }
         let id = parent.map(|p| self.rig_id(p));
+        let keys = 0..self.layers[l].frames.len();
+        let was: Vec<Matrix> = keys.clone().map(|k| crate::layer_motion::parenting_at_start(self, l, k)).collect();
         for k in &mut self.layers[l].frames {
             k.extra.set(RIG_PARENT, id.as_deref());
+        }
+        for (k, was) in keys.zip(was) {
+            let Some(into) = crate::layer_motion::parenting_at_start(self, l, k).inverse() else { continue };
+            let m = into * was;
+            if m != Matrix::IDENTITY {
+                self.layers[l].frames[k].elements.iter_mut().for_each(|el| crate::transform::transform(el, &m));
+            }
         }
         true
     }

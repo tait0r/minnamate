@@ -148,11 +148,11 @@ pub fn brush(points: &[Point], width: f32, fill: Paint) -> Shape {
     segs.extend(arc(pts[n - 1], (half, half), tangents[n - 1] - FRAC_PI_2, PI));
     segs.extend(smooth(&right));
     segs.extend(arc(pts[0], (half, half), tangents[0] + FRAC_PI_2, PI));
-    // ponytail: the outline isn't merged with itself, so where a stroke overlaps itself (a
-    // crossing, a loop closed on its start, a back-and-forth dab, a pen-lift hook longer than
-    // width/10, any turn tighter than the brush) the overlap renders as a hole. Fix: split
-    // the edges where they cross and keep those between filled and empty, as Animate stores shapes.
-    shape(vec![Path { start: left[0], segs }], None, Some(fill))
+    // Where the stroke crosses or doubles back over itself the outline overlaps itself, which
+    // the even-odd fill would show as a hole; merged, it's filled as Animate fills it.
+    let mut s = shape(vec![Path { start: left[0], segs }], None, Some(fill));
+    crate::erase::merge_overlaps(&mut s, 1);
+    s
 }
 
 /// Ramer-Douglas-Peucker: every sample dropped lies within `tolerance` of the
@@ -463,6 +463,31 @@ mod tests {
         );
 
         check([brush(&[(50.0, 50.0)], 10.0, red())], &[(50, 50, RED), (53, 50, RED), (50, 56, WHITE)]);
+    }
+
+    #[test]
+    fn a_brush_stroke_over_itself_stays_filled() {
+        let samples = |pts: &[Point]| -> Vec<Point> {
+            pts.windows(2).flat_map(|w| (0..20).map(move |i| {
+                let t = i as f32 / 20.0;
+                (w[0].0 + (w[1].0 - w[0].0) * t, w[0].1 + (w[1].1 - w[0].1) * t)
+            })).chain(pts.last().copied()).collect()
+        };
+        // Across, then up and back down through the first stroke.
+        let crossing = brush(&samples(&[(10.0, 50.0), (90.0, 50.0), (50.0, 10.0), (50.0, 90.0)]), 10.0, red());
+        check([crossing], &[(50, 50, RED), (30, 50, RED), (50, 70, RED), (30, 30, WHITE)]);
+        // Right, then back left over it.
+        let back = brush(&samples(&[(10.0, 50.0), (90.0, 50.0), (30.0, 50.0)]), 10.0, red());
+        check([back], &[(40, 50, RED), (50, 52, RED), (20, 50, RED), (50, 60, WHITE)]);
+        // A loop round past its start: the ring and the overlap filled, the middle empty.
+        let lap: Vec<Point> = (0..=400).map(|d| polar((50.0, 50.0), 30.0, (d as f32).to_radians())).collect();
+        let ring = brush(&lap, 10.0, red());
+        check([ring], &[(80, 50, RED), (80, 55, RED), (20, 50, RED), (50, 50, WHITE), (50, 30, WHITE)]);
+
+        // A stroke that doesn't overlap itself keeps its curves.
+        let arc: Vec<Point> = (180..=300).map(|d| polar((50.0, 90.0), 40.0, (d as f32).to_radians())).collect();
+        let smooth = brush(&arc, 10.0, red());
+        assert!(smooth.edges[0].paths[0].segs.iter().any(|s| matches!(s, Seg::Quad(..))));
     }
 
     #[test]

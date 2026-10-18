@@ -246,6 +246,22 @@ fn refill(s: &mut Shape, id: u32, region: Vec<Region>) {
     }
 }
 
+/// Fill `id` merged with itself where its outline overlaps, as a brush stroke crossing or
+/// doubling back over itself does: what it covers twice stays filled (non-zero), where even-odd
+/// would leave a hole, and what a loop encloses stays empty. An outline that doesn't overlap
+/// itself is left as it is, curves and all.
+pub(crate) fn merge_overlaps(s: &mut Shape, id: u32) {
+    let outline = fill_outline(s, id);
+    let merged = outline.simplify_shape(FillRule::NonZero);
+    let area = |c: &Contour| c.iter().zip(c.iter().cycle().skip(1)).map(|(a, b)| a[0] * b[1] - b[0] * a[1]).sum::<f32>() / 2.0;
+    let before: f32 = outline.iter().map(area).sum::<f32>().abs();
+    let after: f32 = merged.iter().flatten().map(area).sum::<f32>().abs();
+    if (before - after).abs() <= (before * 1e-4).max(0.5) {
+        return;
+    }
+    refill(s, id, merged);
+}
+
 /// The connected pieces of fill `id`, each an outline with its holes.
 fn pieces(s: &Shape, id: u32) -> Vec<Region> {
     fill_outline(s, id).simplify_shape(FillRule::EvenOdd)

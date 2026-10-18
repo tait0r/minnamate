@@ -369,6 +369,8 @@ pub struct Editor {
     pub stroke_cap: minnamate_core::doc::Cap,
     pub stroke_join: minnamate_core::doc::Join,
     pub brush_size: f32,
+    /// The Brush's Smoothing, 0 to 100.
+    pub brush_smoothing: f32,
     pub corner_radius: f32,
     pub polystar_sides: u32,
     pub polystar_star: bool,
@@ -515,6 +517,7 @@ impl Editor {
             stroke_cap: minnamate_core::doc::Cap::Round,
             stroke_join: minnamate_core::doc::Join::Round,
             brush_size: 10.0,
+            brush_smoothing: minnamate_core::draw::BRUSH_SMOOTHING,
             corner_radius: 0.0,
             polystar_sides: 5,
             polystar_star: false,

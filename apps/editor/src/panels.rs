@@ -649,6 +649,14 @@ fn brush_options(ui: &mut Ui, ed: &mut Editor) {
         });
         widgets::slider(ui, "Size slider", &mut ed.brush_size, 1.0..=200.0);
         ed.brush_size = ed.brush_size.round();
+        widgets::row(ui, |ui| {
+            widgets::label(ui, "Smoothing", WORD_W);
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.add(Number::new("Smoothing", &mut ed.brush_smoothing, 0.0..=100.0).speed(0.5).width(48.0));
+            });
+        });
+        widgets::slider(ui, "Smoothing slider", &mut ed.brush_smoothing, 0.0..=100.0);
+        ed.brush_smoothing = ed.brush_smoothing.round();
         // ponytail: brushes draw at their size whatever the zoom, and the Eraser keeps its own size.
         ui.add_enabled_ui(false, |ui| {
             widgets::row(ui, |ui| widgets::checkbox(ui, &mut true, "Zoom size with stage"));
@@ -1607,6 +1615,28 @@ mod tests {
     }
 
     /// Writes target/screenshots/properties_doc.png: Properties on launch, the Doc tab.
+    #[test]
+    fn the_brush_has_a_smoothing_field() {
+        let mut h = new_doc(false);
+        crate::tools::select(h.state_mut(), Tool::Brush);
+        h.run();
+        assert_eq!(h.state().brush_smoothing, minnamate_core::draw::BRUSH_SMOOTHING);
+        let field = h.get_by_label("Smoothing").rect().center();
+        drag(&mut h, field, field + vec2(-200.0, 0.0));
+        h.run();
+        assert_eq!(h.state().brush_smoothing, 0.0, "scrubbed down to its floor");
+    }
+
+    /// brush_options.png: the Brush's Tool tab, with Size and Smoothing.
+    #[test]
+    #[ignore = "needs a GPU adapter; run with --ignored"]
+    fn brush_options_screenshot() {
+        let mut h = new_doc(true);
+        crate::tools::select(h.state_mut(), Tool::Brush);
+        h.run();
+        screenshot(&mut h, "brush_options");
+    }
+
     #[test]
     #[ignore = "needs a GPU adapter; run with --ignored"]
     fn properties_doc_screenshot() {

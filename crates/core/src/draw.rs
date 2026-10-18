@@ -117,13 +117,19 @@ pub fn pencil(points: &[Point], stroke: Stroke, smoothing: f32) -> Shape {
     shape(path.into_iter().collect(), Some(stroke), None)
 }
 
+/// The Brush's Smoothing to start with, out of 100.
+pub const BRUSH_SMOOTHING: f32 = 50.0;
+
 /// Brush Tool: what a round brush `width` across covers along the raw pointer
 /// samples `points`, as a fill: the smoothed center line offset to either side,
-/// with round caps joining the two sides.
-pub fn brush(points: &[Point], width: f32, fill: Paint) -> Shape {
+/// with round caps joining the two sides. `smoothing`, 0 to 100, is how much of the
+/// hand's wobble is smoothed away: at 0 the stroke follows every sample.
+pub fn brush(points: &[Point], width: f32, smoothing: f32, fill: Paint) -> Shape {
     let half = width / 2.0;
     // The outline sits `half` out along each sample's normal, which pointer jitter would tilt.
-    let pts = simplify(points, width / 10.0);
+    // The tolerance grows with the square of the smoothing, so low values stay close to the hand.
+    let t = smoothing.clamp(0.0, 100.0) / 100.0;
+    let pts = simplify(points, t * t * (2.0 + width * 0.4));
     let n = pts.len();
     match pts[..] {
         [] => return shape(Vec::new(), None, Some(fill)),
@@ -368,7 +374,7 @@ mod tests {
         assert_area(polystar((50.0, 50.0), 30.0, 5, None, 0.0, None, fill.clone()), 2.5 * 900.0 * (TAU / 5.0).sin());
         assert_area(polystar((50.0, 50.0), 30.0, 5, Some(0.5), 0.0, None, fill), 5.0 * 30.0 * 15.0 * (PI / 5.0).sin());
         let samples: Vec<Point> = (20..=80).map(|x| (x as f32, 50.0)).collect();
-        assert_area(brush(&samples, 20.0, red()), 60.0 * 20.0 + PI * 100.0);
+        assert_area(brush(&samples, 20.0, BRUSH_SMOOTHING, red()), 60.0 * 20.0 + PI * 100.0);
     }
 
     #[test]
@@ -380,7 +386,7 @@ mod tests {
             rectangle([(0.3, 0.7), (20.3, 40.9)], 50.0, None, fill.clone()),
             rectangle([(0.3, 0.7), (20.3, 40.9)], -50.0, None, fill.clone()),
             oval([(-40.0, -20.0), (40.0, 20.0)], None, fill.clone()),
-            brush(&[(20.0, 50.0), (50.0, 60.0), (80.0, 50.0)], 20.0, red()),
+            brush(&[(20.0, 50.0), (50.0, 60.0), (80.0, 50.0)], 20.0, BRUSH_SMOOTHING, red()),
         ] {
             let path = &s.edges[0].paths[0];
             assert_eq!(path.segs.last().map(|s| s.end()), Some(path.start));
@@ -440,7 +446,7 @@ mod tests {
         let wobble = |x: i32| if x % 2 == 0 { 0.4 } else { -0.4 };
         let straight: Vec<Point> = (20..=80).map(|x| (x as f32, 50.0 + wobble(x))).collect();
         check(
-            [brush(&straight, 20.0, red())],
+            [brush(&straight, 20.0, BRUSH_SMOOTHING, red())],
             &[
                 (50, 50, RED),
                 (50, 57, RED),
@@ -458,11 +464,23 @@ mod tests {
         let on_circle = |deg: i32| polar((50.0, 90.0), 40.0, (deg as f32).to_radians());
         let over_the_top: Vec<Point> = (180..=360).map(on_circle).collect();
         check(
-            [brush(&over_the_top, 10.0, red())],
+            [brush(&over_the_top, 10.0, BRUSH_SMOOTHING, red())],
             &[(50, 50, RED), (50, 53, RED), (21, 61, RED), (50, 43, WHITE), (50, 57, WHITE), (50, 90, WHITE)],
         );
 
-        check([brush(&[(50.0, 50.0)], 10.0, red())], &[(50, 50, RED), (53, 50, RED), (50, 56, WHITE)]);
+        check([brush(&[(50.0, 50.0)], 10.0, BRUSH_SMOOTHING, red())], &[(50, 50, RED), (53, 50, RED), (50, 56, WHITE)]);
+    }
+
+    #[test]
+    fn brush_smoothing_irons_out_a_shaky_hand() {
+        // A long gentle arc with a pixel of wobble.
+        let shaky: Vec<Point> = (0..=70)
+            .map(|i| polar((50.0, 120.0), 80.0 + if i % 2 == 0 { 0.6 } else { -0.6 }, (200.0 + i as f32 * 2.0).to_radians()))
+            .collect();
+        let segs = |smoothing| brush(&shaky, 10.0, smoothing, red()).edges[0].paths[0].segs.len();
+        let (none, some, most) = (segs(0.0), segs(BRUSH_SMOOTHING), segs(100.0));
+        assert!(none > some && some > most, "{none} > {some} > {most}");
+        assert!(none > 60, "at 0 it keeps every sample");
     }
 
     #[test]
@@ -474,26 +492,26 @@ mod tests {
             })).chain(pts.last().copied()).collect()
         };
         // Across, then up and back down through the first stroke.
-        let crossing = brush(&samples(&[(10.0, 50.0), (90.0, 50.0), (50.0, 10.0), (50.0, 90.0)]), 10.0, red());
+        let crossing = brush(&samples(&[(10.0, 50.0), (90.0, 50.0), (50.0, 10.0), (50.0, 90.0)]), 10.0, BRUSH_SMOOTHING, red());
         check([crossing], &[(50, 50, RED), (30, 50, RED), (50, 70, RED), (30, 30, WHITE)]);
         // Right, then back left over it.
-        let back = brush(&samples(&[(10.0, 50.0), (90.0, 50.0), (30.0, 50.0)]), 10.0, red());
+        let back = brush(&samples(&[(10.0, 50.0), (90.0, 50.0), (30.0, 50.0)]), 10.0, BRUSH_SMOOTHING, red());
         check([back], &[(40, 50, RED), (50, 52, RED), (20, 50, RED), (50, 60, WHITE)]);
         // A loop round past its start: the ring and the overlap filled, the middle empty.
         let lap: Vec<Point> = (0..=400).map(|d| polar((50.0, 50.0), 30.0, (d as f32).to_radians())).collect();
-        let ring = brush(&lap, 10.0, red());
+        let ring = brush(&lap, 10.0, BRUSH_SMOOTHING, red());
         check([ring], &[(80, 50, RED), (80, 55, RED), (20, 50, RED), (50, 50, WHITE), (50, 30, WHITE)]);
 
         // A stroke that doesn't overlap itself keeps its curves.
         let arc: Vec<Point> = (180..=300).map(|d| polar((50.0, 90.0), 40.0, (d as f32).to_radians())).collect();
-        let smooth = brush(&arc, 10.0, red());
+        let smooth = brush(&arc, 10.0, BRUSH_SMOOTHING, red());
         assert!(smooth.edges[0].paths[0].segs.iter().any(|s| matches!(s, Seg::Quad(..))));
     }
 
     #[test]
     fn nothing_to_draw_adds_nothing() {
         let mut frame = Frame { index: 0, duration: 1, tween: Tween::None, elements: Vec::new(), extra: Extra::default() };
-        add(&mut frame, brush(&[], 10.0, red()));
+        add(&mut frame, brush(&[], 10.0, BRUSH_SMOOTHING, red()));
         add(&mut frame, pencil(&[], ink(1.0), 1.0));
         add(&mut frame, rectangle([(0.0, 0.0), (5.0, 5.0)], 0.0, None, None));
         // A click without a drag: every side is too short to draw.

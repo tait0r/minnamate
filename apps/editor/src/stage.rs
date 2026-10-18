@@ -613,7 +613,7 @@ fn finish(ed: &mut Editor, shift: bool, alt: bool) {
             let shape = match ed.tool {
                 // Drop wobble finer than a couple of screen pixels.
                 Tool::Pencil => Some(draw::pencil(&points, ed.stroke(), 2.0 / ed.zoom)),
-                Tool::Brush => Some(draw::brush(&points, ed.brush_size, ed.fill())),
+                Tool::Brush => Some(draw::brush(&points, ed.brush_size, ed.brush_smoothing, ed.fill())),
                 _ => None,
             };
             if let Some(shape) = shape {

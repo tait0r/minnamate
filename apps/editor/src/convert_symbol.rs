@@ -20,12 +20,6 @@ pub struct Dialog {
 
 /// Opens the dialog for the current selection; does nothing without one.
 pub fn open(ed: &mut Editor) {
-    // ponytail: converts on a scene's timeline only; inside a symbol it needs
-    // symbols::convert_to_symbol to take any timeline.
-    if !ed.editing.is_empty() {
-        ed.log("Convert to Symbol works on the scene; leave the symbol first.");
-        return;
-    }
     if !ed.selection.is_empty() {
         ed.convert = Some(Dialog { name: symbols::next_symbol_name(&ed.doc), kind: SymbolKind::MovieClip, registration: (0, 0), new: false });
     }
@@ -94,7 +88,8 @@ fn convert(ed: &mut Editor) {
         let Some(b) = hit::bounds(&ed.doc, ed.timeline(), ed.frame, &ed.selection) else { return };
         let (col, row) = (dialog.registration.0 as f32 / 2.0, dialog.registration.1 as f32 / 2.0);
         let registration = (b.min.0 + (b.max.0 - b.min.0) * col, b.min.1 + (b.max.1 - b.min.1) * row);
-        symbols::convert_to_symbol(&mut doc, ed.scene, ed.frame, &ed.selection, &name, dialog.kind, registration).map(Some)
+        let inside = ed.editing.last().map(|t| t.symbol.as_str());
+        symbols::convert_to_symbol_in(&mut doc, ed.scene, inside, ed.frame, &ed.selection, &name, dialog.kind, registration).map(Some)
     };
     match made {
         Ok(instance) => {

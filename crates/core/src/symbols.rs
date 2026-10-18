@@ -17,8 +17,33 @@ pub fn convert_to_symbol(
     kind: SymbolKind,
     registration: Point,
 ) -> Result<ElementRef> {
+    convert_to_symbol_in(doc, scene, None, frame, refs, name, kind, registration)
+}
+
+/// Convert to Symbol on the timeline of symbol `inside`, or of scene `scene` without one:
+/// `refs` and `registration` are in that timeline's coordinates.
+#[allow(clippy::too_many_arguments)]
+pub fn convert_to_symbol_in(
+    doc: &mut Document,
+    scene: usize,
+    inside: Option<&str>,
+    frame: u32,
+    refs: &[ElementRef],
+    name: &str,
+    kind: SymbolKind,
+    registration: Point,
+) -> Result<ElementRef> {
     check_name(doc, name)?;
-    let timeline = doc.scenes.get(scene).ok_or("no such scene")?;
+    fn timeline_mut<'a>(doc: &'a mut Document, scene: usize, inside: Option<&str>) -> Result<&'a mut Timeline> {
+        Ok(match inside {
+            Some(s) => &mut doc.library.get_mut(s).ok_or("no such symbol")?.timeline,
+            None => doc.scenes.get_mut(scene).ok_or("no such scene")?,
+        })
+    }
+    let timeline = match inside {
+        Some(s) => &doc.library.get(s).ok_or("no such symbol")?.timeline,
+        None => doc.scenes.get(scene).ok_or("no such scene")?,
+    };
     let center = hit::bounds(doc, timeline, frame, refs).map(|b| ((b.min.0 + b.max.0) / 2.0, (b.min.1 + b.max.1) / 2.0));
     let pivot = center.map_or((0.0, 0.0), |c| (c.0 - registration.0, c.1 - registration.1));
 
@@ -28,7 +53,7 @@ pub fn convert_to_symbol(
     refs.sort_by_key(|r| std::cmp::Reverse((r.layer, r.keyframe, r.element)));
     refs.dedup();
     let target = *refs.iter().min_by_key(|r| (r.layer, r.element)).ok_or("nothing selected")?;
-    let layers = &mut doc.scenes[scene].layers;
+    let layers = &mut timeline_mut(doc, scene, inside)?.layers;
     let mut moved = Vec::new();
     for r in &refs {
         let key = layers.get_mut(r.layer).and_then(|l| l.frames.get_mut(r.keyframe)).ok_or("selection is out of date")?;
@@ -57,7 +82,7 @@ pub fn convert_to_symbol(
         first_frame: 0,
         extra: Extra::default(),
     };
-    let key = &mut doc.scenes[scene].layers[target.layer].frames[target.keyframe];
+    let key = &mut timeline_mut(doc, scene, inside)?.layers[target.layer].frames[target.keyframe];
     let at = target.element.min(key.elements.len());
     key.elements.insert(at, Element::Instance(instance));
     Ok(ElementRef { element: at, ..target })
@@ -137,6 +162,22 @@ mod tests {
         assert_eq!((i.matrix.tx, i.matrix.ty, i.kind), (10.0, 10.0, SymbolKind::MovieClip));
         assert_eq!(doc.library["Symbol 1"].timeline.layers[0].frames[0].elements.len(), 2);
         assert_eq!(render(&doc, 0, 1.0).unwrap().0.data(), before.data(), "looks the same after converting");
+    }
+
+    #[test]
+    fn converts_inside_a_symbol() {
+        let mut doc = Document::new(100.0, 100.0, 24.0);
+        new_symbol(&mut doc, "Body", SymbolKind::Graphic).unwrap();
+        let frame = &mut doc.library.get_mut("Body").unwrap().timeline.layers[0].frames[0];
+        draw::add(frame, draw::rectangle([(10.0, 10.0), (30.0, 30.0)], 0.0, None, Some(red())));
+        let r = [ElementRef { layer: 0, keyframe: 0, element: 0 }];
+        let inst = convert_to_symbol_in(&mut doc, 0, Some("Body"), 0, &r, "Arm", SymbolKind::MovieClip, (10.0, 10.0)).unwrap();
+
+        assert_eq!(inst, r[0]);
+        let Element::Instance(i) = &doc.library["Body"].timeline.layers[0].frames[0].elements[0] else { panic!("not an instance") };
+        assert_eq!((i.symbol.as_str(), i.matrix.tx, i.matrix.ty), ("Arm", 10.0, 10.0));
+        assert_eq!(doc.library["Arm"].timeline.layers[0].frames[0].elements.len(), 1);
+        assert!(doc.scenes[0].layers[0].frames[0].elements.is_empty(), "the scene is left alone");
     }
 
     #[test]

@@ -165,28 +165,34 @@ const VIEW: &[Item] = &[
     ]),
     Sep,
     Do("Rulers", "Ctrl+Alt+Shift+R", Stage(Toggle::Rulers)),
-    Sub("Grid", &[Do("Show Grid", "Ctrl+'", Stage(Toggle::Grid)), Do("Edit Grid...", "Ctrl+Alt+G", Todo)]),
-    Sub("Guides", &[
-        Do("Show Guides", "Ctrl+;", Stage(Toggle::Guides)),
-        Do("Lock Guides", "Ctrl+Alt+;", Stage(Toggle::LockGuides)),
-        Do("Edit Guides...", "Ctrl+Alt+Shift+G", Todo),
-        Do("Clear Guides", "", Todo),
-    ]),
-    Sub("Snapping", &[
-        Do("Snap Align", "", Todo),
-        Do("Snap to Grid", "Ctrl+Shift+'", Todo),
-        Do("Snap to Guides", "Ctrl+Shift+;", Todo),
-        Do("Snap to Pixels", "", Todo),
-        Do("Snap to Objects", "Ctrl+Shift+U", Todo),
-        Sep,
-        Do("Edit Snapping...", "Ctrl+/", Todo),
-    ]),
+    Sub("Grid", GRID),
+    Sub("Guides", GUIDES),
+    Sub("Snapping", SNAPPING),
     Sep,
     Do("Hide Edges", "Ctrl+Shift+E", Todo),
     Do("Show Shape Hints", "Ctrl+Alt+I", Stage(Toggle::ShapeHints)),
     Do("Show Tab Order", "", Todo),
     Sep,
     Sub("Screen Mode", &[Do("Standard Screen Mode", "", Todo), Do("Full Screen Mode", "", Todo)]),
+];
+
+const GRID: &[Item] = &[Do("Show Grid", "Ctrl+'", Stage(Toggle::Grid)), Do("Edit Grid...", "Ctrl+Alt+G", Todo)];
+
+const GUIDES: &[Item] = &[
+    Do("Show Guides", "Ctrl+;", Stage(Toggle::Guides)),
+    Do("Lock Guides", "Ctrl+Alt+;", Stage(Toggle::LockGuides)),
+    Do("Edit Guides...", "Ctrl+Alt+Shift+G", Todo),
+    Do("Clear Guides", "", Todo),
+];
+
+const SNAPPING: &[Item] = &[
+    Do("Snap Align", "", Todo),
+    Do("Snap to Grid", "Ctrl+Shift+'", Todo),
+    Do("Snap to Guides", "Ctrl+Shift+;", Todo),
+    Do("Snap to Pixels", "", Todo),
+    Do("Snap to Objects", "Ctrl+Shift+U", Todo),
+    Sep,
+    Do("Edit Snapping...", "Ctrl+/", Todo),
 ];
 
 const INSERT: &[Item] = &[
@@ -259,31 +265,8 @@ const MODIFY: &[Item] = &[
         Do("Custom...", "", Todo),
     ]),
     Sep,
-    Sub("Transform", &[
-        Do("Free Transform", "", FreeTransform),
-        Do("Distort", "", Todo),
-        Do("Envelope", "", Todo),
-        Do("Scale", "", Todo),
-        Do("Rotate and Skew", "", Todo),
-        Do("Scale and Rotate...", "Ctrl+Alt+S", ScaleAndRotate),
-        Sep,
-        Do("Rotate 90° CW", "Ctrl+Shift+9", Rotate90Cw),
-        Do("Rotate 90° CCW", "Ctrl+Shift+7", Rotate90Ccw),
-        Sep,
-        Do("Flip Vertical", "", FlipVertical),
-        Do("Flip Horizontal", "", FlipHorizontal),
-        Sep,
-        Do("Remove Transform", "Ctrl+Shift+Z", RemoveTransform),
-    ]),
-    Sub("Arrange", &[
-        Do("Bring to Front", "Ctrl+Shift+Up", Arrange(BringToFront)),
-        Do("Bring Forward", "Ctrl+Up", Arrange(BringForward)),
-        Do("Send Backward", "Ctrl+Down", Arrange(SendBackward)),
-        Do("Send to Back", "Ctrl+Shift+Down", Arrange(SendToBack)),
-        Sep,
-        Do("Lock", "Ctrl+Alt+L", Todo),
-        Do("Unlock All", "Ctrl+Alt+Shift+L", Todo),
-    ]),
+    Sub("Transform", TRANSFORM),
+    Sub("Arrange", ARRANGE),
     Sub("Align", &[
         Do("Left", "Ctrl+Alt+1", Align(Edges { y: false, at: 0.0 })),
         Do("Horizontal Center", "Ctrl+Alt+2", Align(Edges { y: false, at: 0.5 })),
@@ -304,6 +287,114 @@ const MODIFY: &[Item] = &[
     Do("Group", "Ctrl+G", Group),
     Do("Ungroup", "Ctrl+Shift+G", Ungroup),
 ];
+
+const TRANSFORM: &[Item] = &[
+    Do("Free Transform", "", FreeTransform),
+    Do("Distort", "", Todo),
+    Do("Envelope", "", Todo),
+    Do("Scale", "", Todo),
+    Do("Rotate and Skew", "", Todo),
+    Do("Scale and Rotate...", "Ctrl+Alt+S", ScaleAndRotate),
+    Sep,
+    Do("Rotate 90° CW", "Ctrl+Shift+9", Rotate90Cw),
+    Do("Rotate 90° CCW", "Ctrl+Shift+7", Rotate90Ccw),
+    Sep,
+    Do("Flip Vertical", "", FlipVertical),
+    Do("Flip Horizontal", "", FlipHorizontal),
+    Sep,
+    Do("Remove Transform", "Ctrl+Shift+Z", RemoveTransform),
+];
+
+const ARRANGE: &[Item] = &[
+    Do("Bring to Front", "Ctrl+Shift+Up", Arrange(BringToFront)),
+    Do("Bring Forward", "Ctrl+Up", Arrange(BringForward)),
+    Do("Send Backward", "Ctrl+Down", Arrange(SendBackward)),
+    Do("Send to Back", "Ctrl+Shift+Down", Arrange(SendToBack)),
+    Sep,
+    Do("Lock", "Ctrl+Alt+L", Todo),
+    Do("Unlock All", "Ctrl+Alt+Shift+L", Todo),
+];
+
+// The stage's context menu. Its items are the menus' own actions, so they grey out with them;
+// its shortcuts aren't read from here (`shortcuts` walks MENUS).
+
+/// Right-click on empty stage.
+const STAGE: &[Item] = &[
+    Do("Paste in Center", "Ctrl+V", PasteInCenter),
+    Do("Paste in Place", "Ctrl+Shift+V", PasteInPlace),
+    Do("Select All", "Ctrl+A", SelectAll),
+    Do("Deselect All", "Ctrl+Shift+A", Deselect),
+    Sep,
+    Do("Rulers", "Ctrl+Alt+Shift+R", Stage(Toggle::Rulers)),
+    Sub("Grid", GRID),
+    Sub("Guides", GUIDES),
+    Sub("Snapping", SNAPPING),
+    Sep,
+    Do("Document...", "Ctrl+J", DocumentSettings),
+];
+
+/// Right-click on a selection: editing, arranging and tweening it.
+const STAGE_SELECTION: &[Item] = &[
+    Do("Cut", "Ctrl+X", Cut),
+    Do("Copy", "Ctrl+C", Copy),
+    Do("Paste in Center", "Ctrl+V", PasteInCenter),
+    Do("Paste in Place", "Ctrl+Shift+V", PasteInPlace),
+    Do("Delete", "Delete", DeleteSelection),
+    Do("Select All", "Ctrl+A", SelectAll),
+    Do("Deselect All", "Ctrl+Shift+A", Deselect),
+    Sep,
+    Do("Free Transform", "", FreeTransform),
+    Sub("Arrange", ARRANGE),
+    Sub("Transform", TRANSFORM),
+    Do("Break Apart", "Ctrl+B", BreakApart),
+    Do("Distribute to Layers", "Ctrl+Shift+D", Todo),
+    Do("Distribute to Keyframes", "", Todo),
+    Sep,
+    Do("Create Motion Tween", "", CreateMotionTween),
+    Do("Create Shape Tween", "", CreateShapeTween),
+    Do("Create Classic Tween", "", CreateClassicTween),
+    Sep,
+];
+
+/// Then, with a symbol instance among the selection, the symbol's commands.
+const STAGE_INSTANCE: &[Item] = &[
+    Do("Edit Symbols", "Ctrl+E", EditSymbol),
+    Do("Edit in Place", "", EditInPlace),
+    Do("Edit in New Window", "", Todo),
+    Sep,
+    Do("Swap Symbol...", "", SwapSymbol),
+    Do("Duplicate Symbol...", "", DuplicateSymbol),
+    Do("Show in Library", "", ShowInLibrary),
+    Sep,
+];
+
+/// And last, converting it and its motion.
+const STAGE_CONVERT: &[Item] = &[
+    Do("Convert to Symbol...", "F8", ConvertToSymbol),
+    Do("Convert to Bitmap", "", Todo),
+    Sep,
+    Do("Copy Motion", "", Todo),
+    Do("Copy Motion as ActionScript 3.0...", "", Todo),
+    Do("Paste Motion", "", Todo),
+    Do("Paste Motion Special...", "", Todo),
+    Do("Save as Motion Preset...", "", Todo),
+];
+
+/// The stage's context menu: the selection's commands, or the stage's without one.
+pub(crate) fn stage_menu(ui: &mut Ui, ed: &Editor) -> Option<Action> {
+    ui.set_min_width(240.0);
+    let mut picked = None;
+    if ed.selection.is_empty() {
+        items(ui, STAGE, ed, &mut picked);
+        return picked;
+    }
+    items(ui, STAGE_SELECTION, ed, &mut picked);
+    if ed.selection.iter().any(|&r| matches!(ed.element(r), Some(Element::Instance(_)))) {
+        items(ui, STAGE_INSTANCE, ed, &mut picked);
+    }
+    items(ui, STAGE_CONVERT, ed, &mut picked);
+    picked
+}
 
 const TEXT: &[Item] = &[
     Sub("Font", &[]),
@@ -489,8 +580,7 @@ pub(crate) fn enabled(ed: &Editor, action: Action) -> bool {
             PasteInCenter | PasteInPlace => !ed.clipboard.is_empty() && ed.drawable(),
             Cut | Copy | DeleteSelection | Duplicate | Group | Arrange(_) | Align(_) | RemoveTransform | ScaleAndRotate
             | FlipHorizontal | FlipVertical | Rotate90Cw | Rotate90Ccw => picked,
-            // It converts on a scene's timeline only (convert_symbol::open).
-            ConvertToSymbol => picked && ed.editing.is_empty(),
+            ConvertToSymbol => picked,
             Ungroup => ed.selection.iter().any(|&r| matches!(ed.element(r), Some(Element::Group(_)))),
             // Shapes and text are as far apart as they go (arrange::broken_apart).
             BreakApart => ed.selection.iter().any(|&r| matches!(ed.element(r), Some(Element::Group(_) | Element::Instance(_) | Element::Bitmap(_)))),
@@ -500,7 +590,7 @@ pub(crate) fn enabled(ed: &Editor, action: Action) -> bool {
             EditSymbol => !ed.editing.is_empty() || lone_instance,
             // Swap Symbol swaps every selected instance; Duplicate Symbol copies one.
             SwapSymbol => ed.selection.iter().any(|&r| matches!(ed.element(r), Some(Element::Instance(_)))),
-            DuplicateSymbol => lone_instance,
+            DuplicateSymbol | ShowInLibrary => lone_instance,
             // First, Previous, Next and Last need another scene to go to, or a symbol to leave.
             GoToScene(go) => matches!(go, Go::To(_)) || ed.scene_at(go) != ed.scene || !ed.editing.is_empty(),
             _ => true,
@@ -853,6 +943,75 @@ mod tests {
     const BACKGROUND: ElementRef = ElementRef { layer: 2, keyframe: 0, element: 0 };
 
     #[test]
+    fn right_clicking_the_stage_opens_its_menu_on_what_was_clicked() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = blank();
+        h.state_mut().tool = crate::tools::Tool::Rectangle;
+        mouse_drag(&mut h, (100.0, 100.0), (200.0, 150.0));
+        h.state_mut().tool = crate::tools::Tool::Selection;
+        h.state_mut().selection.clear();
+        let right_click = |h: &mut egui_kittest::Harness<'_, Editor>, at: (f32, f32)| {
+            let at = on_stage(h, at);
+            h.hover_at(at);
+            h.step();
+            for pressed in [true, false] {
+                h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Modifiers::NONE });
+                h.step();
+            }
+            h.run();
+        };
+
+        // On the shape: it's selected, and the menu is the selection's, without the symbol items.
+        right_click(&mut h, (150.0, 125.0));
+        assert_eq!(h.state().selection.len(), 1);
+        assert!(h.query_by_label("Delete Delete").is_some() && h.query_by_label("Edit in Place").is_none());
+        h.get_by_label("Convert to Symbol... F8").click();
+        h.run();
+        assert!(h.state().convert.is_some());
+        h.key_press(Key::Enter);
+        h.run();
+        let r = h.state().selection[0];
+        assert!(matches!(h.state().element(r), Some(Element::Instance(_))));
+
+        // On the instance: its symbol's items too.
+        right_click(&mut h, (150.0, 125.0));
+        h.get_by_label("Show in Library").click();
+        h.run();
+        assert_eq!(h.state().library_selection.as_deref(), Some("Symbol 1"));
+        right_click(&mut h, (150.0, 125.0));
+        h.get_by_label("Delete Delete").click();
+        h.run();
+        assert!(h.state().timeline().layers[0].frames[0].elements.is_empty());
+
+        // On empty stage: the stage's own menu.
+        right_click(&mut h, (400.0, 300.0));
+        assert!(h.query_by_label("Document... Ctrl+J").is_some() && h.query_by_label("Cut Ctrl+X").is_none());
+    }
+
+    /// stage_menu.png: the stage's context menu on a symbol instance, its Arrange submenu open.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn screenshot_stage_menu() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = harness(true);
+        h.run();
+        let ed = h.state();
+        let b = minnamate_core::hit::bounds(&ed.doc, ed.timeline(), ed.frame, &[BLINK]).unwrap();
+        let at = on_stage(&h, ((b.min.0 + b.max.0) / 2.0, (b.min.1 + b.max.1) / 2.0));
+        h.hover_at(at);
+        h.step();
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Modifiers::NONE });
+            h.step();
+        }
+        h.run();
+        assert_eq!(h.state().selection, [BLINK]);
+        h.get_by_label("Arrange ⏵").hover();
+        h.run_steps(10);
+        screenshot(&mut h, "stage_menu");
+    }
+
+    #[test]
     fn convert_and_paste_are_greyed_where_they_would_refuse() {
         let mut h = harness(false);
         h.run();
@@ -860,10 +1019,12 @@ mod tests {
         let ed = h.state_mut();
         ed.selection = vec![BLINK];
         assert!(enabled(ed, ConvertToSymbol));
-        // Convert to Symbol works on the scene only.
+        // Inside a symbol too, as soon as something's selected.
         ed.run(EditInPlace, &ctx);
+        ed.selection.clear();
+        assert!(!enabled(ed, ConvertToSymbol));
         ed.run(SelectAll, &ctx);
-        assert!(!ed.selection.is_empty() && !enabled(ed, ConvertToSymbol));
+        assert!(!ed.selection.is_empty() && enabled(ed, ConvertToSymbol));
         ed.exit_symbol();
         // Pasting needs a normal layer, shown and unlocked.
         ed.selection = vec![BLINK];

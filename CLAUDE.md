@@ -33,7 +33,7 @@ Clean-room, open-source alternative to Adobe Animate, in Rust.
     - `home.rs`: Home screen, New Document, Document Settings.
     - `menu.rs`: app bar and menus; the menu table also defines the shortcuts.
     - `tools.rs`: Tools column.
-    - `stage.rs`: stage view, selection, rulers, guides.
+    - `stage.rs`: stage view, selection, rulers, guides, the right-click menu (its items are in menu.rs's table).
     - `timeline.rs`, with `layer_tree.rs` (folder tree, mask and guide commands, parenting view).
     - `panels.rs`: Properties and the icon strip; `filters.rs`: its Filters section.
     - `library.rs`; `symbol_dialogs.rs`: Symbol Properties, Duplicate Symbol, Swap Symbol; `convert_symbol.rs`: Convert to Symbol (F8) and New Symbol; `spritesheet.rs`: the Library's Generate Sprite Sheet (on the symbols and folders selected; the Library selects several with Ctrl and Shift clicks), the sheet made in the background for its preview.

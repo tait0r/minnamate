@@ -171,6 +171,8 @@ pub enum Action {
     // Modify > Symbol (symbol_dialogs.rs).
     SwapSymbol,
     DuplicateSymbol,
+    /// The stage's context menu: the selected instance's symbol, picked in the Library.
+    ShowInLibrary,
     /// Control > Enable Simple Buttons (buttons.rs).
     SimpleButtons,
 }
@@ -1434,6 +1436,16 @@ impl Editor {
             Action::EditInPlace => {
                 if let [r] = self.selection[..] {
                     self.enter_symbol(r);
+                }
+            }
+            Action::ShowInLibrary => {
+                if let [r] = self.selection[..]
+                    && let Some(Element::Instance(inst)) = self.element(r)
+                {
+                    self.library_selection = Some(inst.symbol.clone());
+                    if !(self.panel_shown(PanelId::Library) && self.right_tab == 1) {
+                        self.toggle_panel(PanelId::Library);
+                    }
                 }
             }
             Action::Cut

@@ -765,7 +765,7 @@ fn shape_props(ui: &mut Ui, ed: &mut Editor) {
         widgets::quick(ui, Icon::Group, false, false, "Group");
         widgets::quick(ui, Icon::BreakApart, false, false, "Break Apart");
         widgets::group_divider(ui);
-        if widgets::quick(ui, Icon::ConvertToSymbol, false, ed.editing.is_empty(), "Convert to Symbol").clicked() {
+        if widgets::quick(ui, Icon::ConvertToSymbol, false, true, "Convert to Symbol").clicked() {
             ed.run(Action::ConvertToSymbol, ui.ctx());
         }
         widgets::quick(ui, Icon::CreateBrush, false, false, "Create Brush");
@@ -1105,7 +1105,7 @@ fn instance_props(ui: &mut Ui, ed: &mut Editor, r: hit::ElementRef) {
         });
     });
     quick_row(ui, |ui| {
-        if widgets::quick(ui, Icon::ConvertToSymbol, false, ed.editing.is_empty(), "Convert to Symbol").clicked() {
+        if widgets::quick(ui, Icon::ConvertToSymbol, false, true, "Convert to Symbol").clicked() {
             ed.run(Action::ConvertToSymbol, ui.ctx());
         }
     });

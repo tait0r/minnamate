@@ -195,6 +195,7 @@ pub fn panel(ui: &mut Ui, ed: &mut Editor) {
             _ => tool_input(ui, ed, &resp, stage),
         }
     }
+    context_menu(ui, ed, &resp, stage);
 
     // Everything renders into a canvas covering the visible view, so artwork off
     // the stage shows on the pasteboard unless "Clip content" is on.
@@ -342,6 +343,25 @@ pub fn tool_input(ui: &Ui, ed: &mut Editor, resp: &egui::Response, stage: Rect) 
     }
     if resp.drag_stopped() {
         finish(ed, shift, alt);
+    }
+}
+
+/// Right-click: with a selecting tool it first selects what's under the pointer, unless that's
+/// selected already (empty space deselects), then the stage's context menu opens on the selection.
+fn context_menu(ui: &Ui, ed: &mut Editor, resp: &egui::Response, stage: Rect) {
+    if resp.secondary_clicked()
+        && selecting(ed.tool)
+        && let Some(pos) = resp.interact_pointer_pos()
+    {
+        let p = local_point(ed, stage, pos);
+        if hit_at(ed, p).is_none_or(|h| !ed.selection.contains(&h)) {
+            click(ed, p, false);
+        }
+    }
+    let mut picked = None;
+    crate::theme::context_menu(resp, |ui| picked = crate::menu::stage_menu(ui, ed));
+    if let Some(action) = picked {
+        ed.run(action, ui.ctx());
     }
 }
 

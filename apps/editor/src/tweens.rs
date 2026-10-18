@@ -80,22 +80,26 @@ pub fn dialogs(ctx: &egui::Context, ed: &mut Editor) {
     if !ok {
         return;
     }
-    // ponytail: as Convert to Symbol, on a scene's timeline only.
-    if !ed.editing.is_empty() {
-        return ed.log("Converting to a symbol works on the scene; leave the symbol first.");
-    }
     let (scene, fps) = (ed.scene, ed.doc.frame_rate);
+    let inside = ed.editing.last().map(|t| t.symbol.clone());
     let mut doc = ed.doc.clone();
     let mut made = Vec::new();
     for (l, f) in spans {
-        let tl = &doc.scenes[scene];
+        let tl = match &inside {
+            Some(s) => &doc.library[s].timeline,
+            None => &doc.scenes[scene],
+        };
         let Some(k) = tl.layers.get(l).and_then(|layer| layer.keyframe_at(f)) else { continue };
         let refs: Vec<ElementRef> = (0..tl.layers[l].frames[k].elements.len()).map(|element| ElementRef { layer: l, keyframe: k, element }).collect();
         let Some(b) = hit::bounds(&doc, tl, f, &refs) else { continue };
         let name = symbols::next_symbol_name(&doc);
-        match symbols::convert_to_symbol(&mut doc, scene, f, &refs, &name, SymbolKind::MovieClip, b.min) {
+        match symbols::convert_to_symbol_in(&mut doc, scene, inside.as_deref(), f, &refs, &name, SymbolKind::MovieClip, b.min) {
             Ok(r) => {
-                doc.scenes[scene].layers[l].create_motion_tween(f, fps);
+                let tl = match &inside {
+                    Some(s) => &mut doc.library.get_mut(s).unwrap().timeline,
+                    None => &mut doc.scenes[scene],
+                };
+                tl.layers[l].create_motion_tween(f, fps);
                 made.push(r);
             }
             Err(e) => {

@@ -7,7 +7,7 @@ use eframe::egui::{
     self, Align, Align2, Color32, ComboBox, DragValue, FontId, Frame, Grid, Id, Key, Layout, Margin, Rect, Response,
     RichText, Sense, Stroke, StrokeKind, Ui, WidgetInfo, WidgetType, pos2, vec2,
 };
-use minnamate_core::doc::{Document, Element, Matrix, Rgba};
+use minnamate_core::doc::{Element, Matrix, Rgba};
 use minnamate_core::hit;
 
 use crate::app::{Action, Editor, PropsTab};
@@ -103,7 +103,7 @@ pub struct State {
     defaults: Setup,
     new_doc: Option<NewDoc>,
     settings: Option<Settings>,
-    /// What Create or a Home tile is opening, waiting on "Save changes?".
+    /// What Create or a Home tile is opening, for `Action::CreateDocument`.
     pending: Option<Setup>,
     /// And whether it's an HTML5 Canvas document.
     pending_canvas: bool,
@@ -117,7 +117,7 @@ impl State {
     pub fn allows(&self, action: Action) -> bool {
         match action {
             Action::New | Action::CreateDocument | Action::Open | Action::OpenDropped | Action::OpenRecent(_) | Action::Exit | Action::About => true,
-            Action::Close | Action::Save | Action::SaveAs | Action::ShowDocument => self.doc_open,
+            Action::Close | Action::CloseAll | Action::Save | Action::SaveAs | Action::ShowDocument(_) | Action::NextDocument | Action::PrevDocument => self.doc_open,
             _ => !self.shown,
         }
     }
@@ -263,8 +263,7 @@ pub fn open_new(ed: &mut Editor, tab: usize, tile: usize) {
     ed.home.new_doc = Some(nd);
 }
 
-/// Opens `setup` as Untitled-N, an HTML5 Canvas document if `canvas`, once "Save changes?"
-/// lets the open document go.
+/// Opens `setup` as Untitled-N, an HTML5 Canvas document if `canvas`, in a new tab.
 fn create(ed: &mut Editor, ctx: &egui::Context, setup: Setup, canvas: bool) {
     ed.home.new_doc = None;
     (ed.home.pending, ed.home.pending_canvas) = (Some(setup), canvas);
@@ -279,13 +278,6 @@ pub fn create_pending(ed: &mut Editor) {
         ed.doc.set_canvas(std::mem::take(&mut ed.home.pending_canvas));
         (ed.home.units, ed.props_tab) = (s.units, PropsTab::Doc);
     }
-}
-
-/// File > Close: back to Home, with no document open.
-pub fn close(ed: &mut Editor) {
-    ed.load(Document::new(550.0, 400.0, 24.0), String::new(), None);
-    ed.test = None;
-    (ed.home.shown, ed.home.doc_open) = (true, false);
 }
 
 /// The app bar's Home button: shows Home, or goes back to the open document.
@@ -908,7 +900,7 @@ mod tests {
         let ed = h.state();
         eprintln!("P1 full hd: {}x{} {} shown={} title={}", ed.doc.width, ed.doc.height, ed.doc.frame_rate, ed.home.shown, ed.title);
 
-        // 2. Dirty doc, Home, tile -> confirm.
+        // 2. Dirty doc, Home, tile -> a second tab.
         let ctx = h.ctx.clone();
         h.state_mut().tool = Tool::Rectangle;
         mouse_drag(&mut h, (900.0, 500.0), (1000.0, 550.0));
@@ -921,9 +913,8 @@ mod tests {
         h.get_by_label("Create").click();
         h.run();
         eprintln!("P2 confirm={:?} pending={:?}", h.state().confirm, h.state().home.pending);
-        h.get_by_label_contains("Don't Save").click();
-        h.run();
         let ed = h.state();
+        assert_eq!(ed.documents().len(), 2);
         eprintln!("P2 after: {}x{} {} title={} shown={}", ed.doc.width, ed.doc.height, ed.doc.frame_rate, ed.title, ed.home.shown);
 
         // 3. Escape closes New Document.

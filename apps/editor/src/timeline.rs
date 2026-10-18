@@ -138,6 +138,14 @@ impl State {
         self.onion.anchor = None;
         self.parent_menu = None;
     }
+
+    /// Another document comes to the front: as `reset`, but cut or copied frames and
+    /// layers stay to paste there, as Edit > Copy's elements do.
+    pub fn leave_document(&mut self) {
+        let (clip, layer_clip) = (self.clip.take(), std::mem::take(&mut self.layer_clip));
+        self.reset();
+        (self.clip, self.layer_clip) = (clip, layer_clip);
+    }
 }
 
 /// Onion skin settings: the Onion button's menu and its settings window.

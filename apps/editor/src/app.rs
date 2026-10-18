@@ -38,6 +38,11 @@ pub enum Action {
     /// Opens the file dropped on the window.
     OpenDropped,
     Close,
+    /// File > Close All, asking about each document's unsaved changes in turn.
+    CloseAll,
+    /// Ctrl+Tab and Ctrl+Shift+Tab: the document tab to the right, or to the left.
+    NextDocument,
+    PrevDocument,
     /// Modify > Document: the Document Settings dialog.
     DocumentSettings,
     /// File > Import > Import Video (video.rs).
@@ -153,8 +158,8 @@ pub enum Action {
     /// Window > Workspaces > Essentials: the only layout there is, so nothing changes.
     Workspace,
     ResetWorkspace,
-    /// Window > the open document: brings it in front of Home.
-    ShowDocument,
+    /// Window > an open document, or its tab: brings it in front, of Home too.
+    ShowDocument(usize),
     /// View > Rulers, Grid and Guides.
     Stage(crate::stage::Toggle),
     // File > Import and Modify > Bitmap (bitmaps.rs).
@@ -304,6 +309,62 @@ fn cached<K: std::hash::Hash + Eq>(
         }
         Entry::Vacant(slot) => slot.insert((ctx.load_texture("stage", image, TextureOptions::LINEAR), key)).0.id(),
     })
+}
+
+/// An open document's own state while another one is in front. The one in front keeps
+/// its state in `Editor`'s fields of the same names; `Editor::exchange` swaps them.
+pub struct Session {
+    doc: Document,
+    title: String,
+    path: Option<PathBuf>,
+    scene: usize,
+    frame: u32,
+    layer: usize,
+    zoom: f32,
+    pan: Vec2,
+    first_visible_frame: f32,
+    first_visible_layer: f32,
+    library_selection: Option<String>,
+    library_selected: BTreeSet<String>,
+    library_anchor: Option<String>,
+    library_open: BTreeSet<String>,
+    selection: Vec<ElementRef>,
+    editing: Vec<EditTarget>,
+    guides: Vec<crate::stage::Guide>,
+    reported: BTreeSet<String>,
+    undo: Vec<Step>,
+    redo: Vec<Step>,
+    dirty: bool,
+    publish: crate::publish::State,
+}
+
+impl Default for Session {
+    fn default() -> Self {
+        Session {
+            doc: Document::new(550.0, 400.0, 24.0),
+            title: String::new(),
+            path: None,
+            scene: 0,
+            frame: 0,
+            layer: 0,
+            zoom: 1.0,
+            pan: Vec2::ZERO,
+            first_visible_frame: 0.0,
+            first_visible_layer: 0.0,
+            library_selection: None,
+            library_selected: BTreeSet::new(),
+            library_anchor: None,
+            library_open: BTreeSet::new(),
+            selection: Vec::new(),
+            editing: Vec::new(),
+            guides: Vec::new(),
+            reported: BTreeSet::new(),
+            undo: Vec::new(),
+            redo: Vec::new(),
+            dirty: false,
+            publish: Default::default(),
+        }
+    }
 }
 
 pub struct Editor {
@@ -458,6 +519,15 @@ pub struct Editor {
     pub scene_panel: crate::scene_panel::State,
     /// Control > Enable Simple Buttons: the stage's buttons answer the pointer.
     pub simple_buttons: bool,
+    /// The open documents in tab order, empty with none open. The one in front, `active`,
+    /// keeps its state in the fields above, leaving its place here blank.
+    docs: Vec<Session>,
+    active: usize,
+    /// The first document tab the row shows; those left of it are behind ">>".
+    tab_first: usize,
+    tab_drag: Option<TabDrag>,
+    /// Where the document tabs shown were last drawn, by document, in screen points.
+    pub doc_tab_rects: Vec<(usize, Rect)>,
 }
 
 impl Editor {
@@ -569,6 +639,11 @@ impl Editor {
             symbol_dialogs: Vec::new(),
             scene_panel: Default::default(),
             simple_buttons: false,
+            docs: Vec::new(),
+            active: 0,
+            tab_first: 0,
+            tab_drag: None,
+            doc_tab_rects: Vec::new(),
         };
         if let Some(path) = path {
             ed.open(path);
@@ -610,6 +685,13 @@ impl Editor {
     }
 
     pub fn open(&mut self, path: PathBuf) {
+        // A document already open comes to the front instead.
+        if let Some(i) = (0..self.docs.len()).find(|&i| self.path_of(i) == Some(path.as_path())) {
+            self.remember(&path);
+            self.switch_document(i);
+            self.home.shown = false;
+            return;
+        }
         match xfl::load(&path) {
             Ok(doc) => {
                 let title = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -621,45 +703,146 @@ impl Editor {
         }
     }
 
+    /// Opens `doc` in a new tab, right of the one in front, and brings it to the front:
+    /// on frame 1 of its first scene, centered at 100% as Animate opens documents.
     pub fn load(&mut self, doc: Document, title: String, path: Option<PathBuf>) {
-        // Typing ends in the document and timeline it started in: here, and where symbols are entered and left.
-        crate::text_tool::commit(self);
-        self.doc = doc;
-        self.title = title;
-        self.publish = crate::publish::State::read(path.as_deref());
-        self.symbol_dialogs.clear();
-        (self.scene_panel.renaming, self.scene_panel.deleting) = (None, None);
-        self.path = path;
-        self.scene = 0;
-        self.frame = 0;
-        self.playing = None;
-        self.layer = 0;
-        self.pan = Vec2::ZERO;
-        // Animate opens documents centered at 100%.
-        self.zoom = 1.0;
-        self.first_visible_frame = 0.0;
-        self.first_visible_layer = 0.0;
-        self.library_selection = None;
-        self.library_selected.clear();
-        self.library_anchor = None;
-        self.library_open.clear();
-        self.library_rename = None;
-        self.selection.clear();
-        self.drag = None;
-        self.pen = Default::default();
-        self.renaming = None;
-        self.tl.reset();
-        self.editing.clear();
-        self.convert = None;
-        self.stage.guides.clear();
-        self.reported.clear();
-        self.undo.clear();
-        self.redo.clear();
-        self.gesture = None;
-        self.dirty = false;
-        self.rev += 1;
+        self.leave_document();
+        let mut session = Session { publish: crate::publish::State::read(path.as_deref()), doc, title, path, ..Default::default() };
+        self.exchange(&mut session);
+        if self.home.doc_open {
+            self.docs[self.active] = session;
+            self.active += 1;
+            self.docs.insert(self.active, Session::default());
+        } else {
+            (self.docs, self.active) = (vec![Session::default()], 0);
+        }
         // A document takes the place of Home.
         (self.home.shown, self.home.doc_open) = (false, true);
+    }
+
+    /// Swaps the document in front's own state with `other`'s.
+    fn exchange(&mut self, other: &mut Session) {
+        use std::mem::swap;
+        swap(&mut self.doc, &mut other.doc);
+        swap(&mut self.title, &mut other.title);
+        swap(&mut self.path, &mut other.path);
+        swap(&mut self.scene, &mut other.scene);
+        swap(&mut self.frame, &mut other.frame);
+        swap(&mut self.layer, &mut other.layer);
+        swap(&mut self.zoom, &mut other.zoom);
+        swap(&mut self.pan, &mut other.pan);
+        swap(&mut self.first_visible_frame, &mut other.first_visible_frame);
+        swap(&mut self.first_visible_layer, &mut other.first_visible_layer);
+        swap(&mut self.library_selection, &mut other.library_selection);
+        swap(&mut self.library_selected, &mut other.library_selected);
+        swap(&mut self.library_anchor, &mut other.library_anchor);
+        swap(&mut self.library_open, &mut other.library_open);
+        swap(&mut self.selection, &mut other.selection);
+        swap(&mut self.editing, &mut other.editing);
+        swap(&mut self.stage.guides, &mut other.guides);
+        swap(&mut self.reported, &mut other.reported);
+        swap(&mut self.undo, &mut other.undo);
+        swap(&mut self.redo, &mut other.redo);
+        swap(&mut self.dirty, &mut other.dirty);
+        swap(&mut self.publish, &mut other.publish);
+    }
+
+    /// Before another document comes to the front: ends what's going on in this one
+    /// (typing, playback, a drag, its dialogs). Tool settings and the clipboards stay.
+    fn leave_document(&mut self) {
+        // Typing ends in the document and timeline it started in: here, and where symbols are entered and left.
+        crate::text_tool::commit(self);
+        self.playing = None;
+        self.drag = None;
+        self.gesture = None;
+        self.pen = Default::default();
+        self.transform = Default::default();
+        self.gradient_transform = Default::default();
+        self.renaming = None;
+        self.library_rename = None;
+        self.convert = None;
+        self.spritesheet = None;
+        self.symbol_dialogs.clear();
+        (self.scene_panel.renaming, self.scene_panel.deleting) = (None, None);
+        self.tl.leave_document();
+        self.actions.leave_document();
+        // A new revision: the stage's cached images are of the other document.
+        self.rev += 1;
+        self.center_frame = true;
+    }
+
+    /// The open documents' titles and unsaved changes, in tab order.
+    pub fn documents(&self) -> Vec<(&str, bool)> {
+        (0..self.docs.len())
+            .map(|i| match i == self.active {
+                true => (self.title.as_str(), self.dirty),
+                false => (self.docs[i].title.as_str(), self.docs[i].dirty),
+            })
+            .collect()
+    }
+
+    /// Which of `documents` is in front.
+    pub fn active_document(&self) -> usize {
+        self.active
+    }
+
+    fn path_of(&self, i: usize) -> Option<&std::path::Path> {
+        if i == self.active { self.path.as_deref() } else { self.docs.get(i)?.path.as_deref() }
+    }
+
+    /// Whether any open document has unsaved changes.
+    pub fn any_dirty(&self) -> bool {
+        (self.home.doc_open && self.dirty) || self.docs.iter().any(|s| s.dirty)
+    }
+
+    /// Brings open document `i` to the front.
+    pub fn switch_document(&mut self, i: usize) {
+        if i == self.active || i >= self.docs.len() {
+            return;
+        }
+        self.leave_document();
+        let mut session = std::mem::take(&mut self.docs[i]);
+        self.exchange(&mut session);
+        self.docs[self.active] = session;
+        self.active = i;
+    }
+
+    /// File > Close, once unsaved changes were dealt with: the document goes, and the tab
+    /// to its right comes to the front (to its left for the last tab), or Home with none left.
+    pub fn close_document(&mut self) {
+        if !self.home.doc_open {
+            return;
+        }
+        self.leave_document();
+        self.docs.remove(self.active);
+        if self.docs.is_empty() {
+            let mut blank = Session::default();
+            self.exchange(&mut blank);
+            self.active = 0;
+            self.test = None;
+            (self.home.shown, self.home.doc_open) = (true, false);
+            return;
+        }
+        self.active = self.active.min(self.docs.len() - 1);
+        let mut session = std::mem::take(&mut self.docs[self.active]);
+        self.exchange(&mut session);
+    }
+
+    /// File > Close All and Exit: closes the documents one by one, stopping to ask about
+    /// one with unsaved changes (`action` runs again once answered). Returns whether all closed.
+    fn close_all(&mut self, action: Action) -> bool {
+        // The answer given covers the document it was asked about, not the ones after it.
+        let mut agreed = std::mem::take(&mut self.discard_ok);
+        while self.home.doc_open {
+            if self.dirty && !agreed {
+                self.home.shown = false;
+                self.confirm = Some(action);
+                return false;
+            }
+            agreed = false;
+            self.close_document();
+        }
+        true
     }
 
     /// Call before changing the document: records an undo step.
@@ -1037,9 +1220,6 @@ impl Editor {
             Answer::Cancel => false,
         };
         if go {
-            if action == Action::Exit {
-                self.closing = true;
-            }
             self.discard_ok = true;
             self.run(action, ctx);
             self.discard_ok = false;
@@ -1322,9 +1502,9 @@ impl Editor {
         if !self.home.allows(action) {
             return;
         }
-        // Commands that drop the open document first ask about unsaved changes.
-        let discards = matches!(action, Action::CreateDocument | Action::Open | Action::OpenDropped | Action::OpenRecent(_) | Action::Close | Action::Exit);
-        if discards && self.dirty && !self.discard_ok {
+        // Closing the document first asks about unsaved changes (Close All and Exit ask
+        // about each one). Opening one opens a tab beside it.
+        if action == Action::Close && self.dirty && !self.discard_ok {
             self.confirm = Some(action);
             return;
         }
@@ -1339,12 +1519,23 @@ impl Editor {
                     self.open(path);
                 }
             }
-            Action::Close => crate::home::close(self),
+            Action::Close => self.close_document(),
+            Action::CloseAll => {
+                self.close_all(action);
+            }
+            Action::NextDocument | Action::PrevDocument => {
+                let n = self.docs.len();
+                let step = if action == Action::NextDocument { 1 } else { n - 1 };
+                self.switch_document((self.active + step) % n);
+                self.home.shown = false;
+            }
             Action::DocumentSettings => crate::home::open_settings(self),
             Action::ImportVideo => crate::video::import_dialog(self),
             Action::Exit => {
-                self.closing = true;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                if self.close_all(action) {
+                    self.closing = true;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
             }
             Action::Save => {
                 self.save();
@@ -1491,7 +1682,10 @@ impl Editor {
                     ctx.data_mut(|d| d.remove::<egui::PanelState>(egui::Id::new(id)));
                 }
             }
-            Action::ShowDocument => self.home.shown = false,
+            Action::ShowDocument(i) => {
+                self.switch_document(i);
+                self.home.shown = false;
+            }
             // The playhead stops at the last frame.
             Action::StepForward if self.frame + 1 < self.frame_count() => self.set_frame(self.frame + 1),
             Action::StepForward => {}
@@ -1541,6 +1735,8 @@ impl Editor {
             (Modifiers::COMMAND, Key::Plus, Action::ZoomIn),
             (Modifiers::COMMAND | Modifiers::SHIFT, Key::Plus, Action::ZoomIn),
             (Modifiers::COMMAND | Modifiers::ALT, Key::O, Action::OnionSkin),
+            (Modifiers::COMMAND, Key::Tab, Action::NextDocument),
+            (Modifiers::COMMAND | Modifiers::SHIFT, Key::Tab, Action::PrevDocument),
         ]);
         let (chords, keys): (Vec<_>, Vec<_>) = all.into_iter().partition(|(m, ..)| m.command || m.alt);
         // A text field with the keyboard (the Text tool's too) keeps the keys that edit text,
@@ -1623,8 +1819,8 @@ impl Editor {
         self.home.dialog_open() || ctx.memory(|m| m.top_modal_layer()).is_some()
     }
 
-    /// A file dropped on the window opens as File > Open would: asking about
-    /// unsaved changes first, and not while a dialog is up (a native one takes no drops).
+    /// A file dropped on the window opens as File > Open would, in a tab of its own,
+    /// but not while a dialog is up (a native one takes no drops).
     fn dropped_files(&mut self, ctx: &egui::Context) {
         if self.dialog_up(ctx) {
             return;
@@ -1726,30 +1922,177 @@ impl Editor {
         })
     }
 
-    /// The document tab row: the open document's tab, filled like the edit bar
-    /// below so the two join, with "*" for unsaved changes and a close box.
+    /// The document tab row (docs/animate-ui.md §4.3): a tab per open document, "*" marking
+    /// unsaved changes. The one in front is filled like the edit bar below so the two join and
+    /// shows its close box; the others show theirs on hover. Pressing a tab brings it to the
+    /// front, and dragging it along the row moves it. Tabs that don't fit go behind a ">>"
+    /// button at the right end, which lists them; the one in front always shows.
     fn doc_tabs(&mut self, ui: &mut Ui) {
         let (rect, _) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
         let painter = ui.painter_at(rect);
-        let label = if self.dirty { format!("{}*", self.title) } else { self.title.clone() };
-        let galley = painter.layout_no_wrap(label, FontId::proportional(12.0), Color32::WHITE);
-        let width = (galley.size().x + 10.0 + 8.0 + 16.0 + 6.0).clamp(80.0, 220.0);
-        let tab = Rect::from_min_size(rect.min, vec2(width, rect.height()));
-        painter.rect_filled(tab, CornerRadius::ZERO, theme::PANEL_BG);
-        painter.vline(tab.right(), tab.y_range(), Stroke::new(1.0, theme::APP_BG));
-        painter.galley(pos2(tab.left() + 10.0, tab.center().y - galley.size().y / 2.0), galley, Color32::WHITE);
-        let close = Rect::from_center_size(pos2(tab.right() - 6.0 - 8.0, tab.center().y), vec2(16.0, 16.0));
-        let resp = ui.interact(close, ui.id().with("close-doc"), Sense::click()).on_hover_text("Close");
-        if resp.hovered() {
-            painter.rect_filled(close, 2.0, theme::BUTTON_ACTIVE);
+        let tabs: Vec<_> = self
+            .documents()
+            .into_iter()
+            .map(|(title, dirty)| {
+                let label = if dirty { format!("{title}*") } else { title.to_string() };
+                let mut job = egui::text::LayoutJob::simple_singleline(label, FontId::proportional(12.0), Color32::PLACEHOLDER);
+                // Tabs are 80 to 220 wide: the label's 10 px padding, an 8 px gap, the 16 px close box and 6 px.
+                (job.wrap.max_width, job.wrap.max_rows, job.wrap.break_anywhere) = (220.0 - 40.0, 1, true);
+                let galley = painter.layout_job(job);
+                let width = (galley.size().x + 10.0 + 8.0 + 16.0 + 6.0).clamp(80.0, 220.0);
+                (galley, width)
+            })
+            .collect();
+        let widths: Vec<f32> = tabs.iter().map(|t| t.1).collect();
+        let fits = widths.iter().map(|w| w + 1.0).sum::<f32>() <= rect.width();
+        let room = if fits { rect.width() } else { rect.width() - OVERFLOW_W };
+        let (first, end) = self.tab_window(&widths, room);
+        let row = Rect::from_min_size(rect.min, vec2(room, rect.height()));
+        let tab_painter = painter.with_clip_rect(row);
+        let mut slots = Vec::new();
+        let mut x = rect.left();
+        for &w in &widths[first..end] {
+            slots.push(Rect::from_min_size(pos2(x, rect.top()), vec2(w, rect.height())));
+            x += w + 1.0;
         }
-        let c = close.shrink(4.0);
-        let stroke = Stroke::new(1.5, if resp.hovered() { Color32::WHITE } else { theme::TEXT });
-        painter.line_segment([c.left_top(), c.right_bottom()], stroke);
-        painter.line_segment([c.right_top(), c.left_bottom()], stroke);
-        if resp.clicked() {
+        self.doc_tab_rects = (first..end).zip(slots.iter().copied()).collect();
+        let slot = |i: usize| slots[i - first];
+        let pointer = ui.ctx().pointer_latest_pos();
+        let dragging = self.tab_drag.is_some();
+        let (mut show, mut close) = (None, None);
+        for (i, (galley, _)) in tabs.iter().enumerate().take(end).skip(first) {
+            let tab = slot(i);
+            let front = i == self.active;
+            let resp = ui.interact(tab, ui.id().with(("doc-tab", i)), Sense::click_and_drag());
+            let close_box = Rect::from_center_size(pos2(tab.right() - 6.0 - 8.0, tab.center().y), vec2(16.0, 16.0));
+            let close_resp = ui.interact(close_box, ui.id().with(("close-doc", i)), Sense::click()).on_hover_text("Close");
+            if resp.drag_started() {
+                let grab = pointer.map_or(0.0, |p| p.x - tab.left());
+                self.tab_drag = Some(TabDrag { grab, stepped: ui.input(|i| i.time) });
+                show = Some(i);
+            } else if close_resp.clicked() {
+                close = Some(i);
+            } else if resp.clicked() {
+                show = Some(i);
+            }
+            // The dragged tab is the one in front; it's drawn last, under the pointer.
+            if dragging && front {
+                continue;
+            }
+            let hot = !dragging && (resp.hovered() || close_resp.hovered());
+            paint_doc_tab(&tab_painter, tab, galley.clone(), front, hot, close_resp.hovered() && !dragging);
+        }
+        if !fits {
+            let button = Rect::from_min_size(pos2(row.right(), rect.top()), vec2(OVERFLOW_W, rect.height()));
+            let resp = ui.interact(button, ui.id().with("doc-tabs-more"), Sense::click());
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "More documents"));
+            let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
+            if open || resp.hovered() {
+                painter.rect_filled(button.shrink2(vec2(2.0, 4.0)), 2.0, if open { theme::BUTTON_ACTIVE } else { theme::BUTTON_HOVER });
+            }
+            crate::icons::paint(&painter, Rect::from_center_size(button.center(), vec2(18.0, 18.0)), Icon::ChevronsRight, theme::TEXT);
+            let titles: Vec<(usize, String)> = self.documents().into_iter().enumerate().filter(|(i, _)| !(first..end).contains(i)).map(|(i, (t, d))| (i, if d { format!("{t}*") } else { t.to_string() })).collect();
+            egui::Popup::menu(&resp).style(theme::menu_style).show(|ui| {
+                for (i, title) in &titles {
+                    if theme::menu_item(ui, true, title, "").clicked() {
+                        show = Some(*i);
+                    }
+                }
+            });
+        }
+        if let (Some(drag), Some(p)) = (&self.tab_drag, pointer) {
+            if (first..end).contains(&self.active) {
+                let (galley, w) = &tabs[self.active];
+                let left = (p.x - drag.grab).clamp(row.left(), (row.right() - w).max(row.left()));
+                let tab = Rect::from_min_size(pos2(left, rect.top()), vec2(*w, rect.height()));
+                paint_doc_tab(&tab_painter, tab, galley.clone(), true, false, false);
+            }
+        }
+        if let Some(i) = close {
+            // A tab behind closes as the one in front does: in front, asking about unsaved changes.
+            self.run(Action::ShowDocument(i), ui.ctx());
             self.run(Action::Close, ui.ctx());
+        } else if let Some(i) = show {
+            self.run(Action::ShowDocument(i), ui.ctx());
         }
+        self.drag_tab(ui, &slots, first, end, row);
+    }
+
+    /// The tabs the row shows, `first..end`, in `room` points: from where it showed last,
+    /// moved just enough to show the one in front, and filled out to the left if there's room.
+    fn tab_window(&mut self, widths: &[f32], room: f32) -> (usize, usize) {
+        let n = widths.len();
+        if n == 0 {
+            return (0, 0);
+        }
+        let mut first = self.tab_first.min(self.active).min(n - 1);
+        let (end, used) = loop {
+            let (mut end, mut used) = (first, 0.0);
+            // At least one tab shows, however narrow the row.
+            while end < n && (end == first || used + widths[end] <= room) {
+                used += widths[end] + 1.0;
+                end += 1;
+            }
+            if self.active < end {
+                break (end, used);
+            }
+            first += 1;
+        };
+        let mut used = used;
+        while first > 0 && used + widths[first - 1] <= room {
+            first -= 1;
+            used += widths[first] + 1.0;
+        }
+        self.tab_first = first;
+        (first, end)
+    }
+
+    /// While a tab is dragged: past the middle of the tab beside it, the two change places;
+    /// held past the end of the row, it steps into the hidden tab's place there now and then.
+    fn drag_tab(&mut self, ui: &Ui, slots: &[Rect], first: usize, end: usize, row: Rect) {
+        let Some(drag) = &mut self.tab_drag else { return };
+        let (down, now) = ui.input(|i| (i.pointer.primary_down(), i.time));
+        let Some(p) = ui.ctx().pointer_latest_pos().filter(|_| down) else {
+            self.tab_drag = None;
+            return;
+        };
+        ui.ctx().request_repaint();
+        let d = self.active;
+        if !(first..end).contains(&d) {
+            return;
+        }
+        let slot = |i: usize| slots[i - first];
+        let ready = now - drag.stepped >= TAB_STEP;
+        let to = if d > first && p.x < slot(d - 1).center().x {
+            Some(d - 1)
+        } else if d + 1 < end && p.x > slot(d + 1).center().x {
+            Some(d + 1)
+        } else if d == first && d > 0 && p.x < row.left() && ready {
+            Some(d - 1)
+        } else if d + 1 == end && d + 1 < self.docs.len() && p.x > row.right() && ready {
+            Some(d + 1)
+        } else {
+            None
+        };
+        if let Some(to) = to {
+            drag.stepped = now;
+            self.move_document(d, to);
+        }
+    }
+
+    /// Moves the tab at `from` to `to`, the documents between closing up.
+    pub fn move_document(&mut self, from: usize, to: usize) {
+        if from >= self.docs.len() || to >= self.docs.len() || from == to {
+            return;
+        }
+        let session = self.docs.remove(from);
+        self.docs.insert(to, session);
+        self.active = match self.active {
+            a if a == from => to,
+            a if from < a && a <= to => a - 1,
+            a if to <= a && a < from => a + 1,
+            a => a,
+        };
     }
 
     fn dialogs(&mut self, ctx: &egui::Context) {
@@ -1818,11 +2161,44 @@ impl Editor {
     }
 }
 
+/// The document tab row's ">>" button, at its right end while tabs don't fit.
+const OVERFLOW_W: f32 = 24.0;
+/// How often a tab held past the end of the row steps into the next hidden tab's place, in seconds.
+const TAB_STEP: f64 = 0.3;
+
+/// A document tab being dragged (the one in front): where the pointer holds it, from its
+/// left edge, and when it last stepped past the end of the row.
+struct TabDrag {
+    grab: f32,
+    stepped: f64,
+}
+
+/// A document tab: filled when `front`, its label lighter when `front` or `hot` (hovered),
+/// and its close box then, `close_hot` when the pointer is on it.
+fn paint_doc_tab(painter: &egui::Painter, tab: Rect, galley: std::sync::Arc<egui::Galley>, front: bool, hot: bool, close_hot: bool) {
+    if front {
+        painter.rect_filled(tab, CornerRadius::ZERO, theme::PANEL_BG);
+    }
+    painter.vline(tab.right(), tab.y_range(), Stroke::new(1.0, theme::APP_BG));
+    let color = if front { Color32::WHITE } else if hot { theme::TEXT } else { theme::TEXT_DIM };
+    painter.galley(pos2(tab.left() + 10.0, tab.center().y - galley.size().y / 2.0), galley, color);
+    if front || hot {
+        let close_box = Rect::from_center_size(pos2(tab.right() - 6.0 - 8.0, tab.center().y), vec2(16.0, 16.0));
+        if close_hot {
+            painter.rect_filled(close_box, 2.0, theme::BUTTON_ACTIVE);
+        }
+        let c = close_box.shrink(4.0);
+        let stroke = Stroke::new(1.5, if close_hot { Color32::WHITE } else { theme::TEXT });
+        painter.line_segment([c.left_top(), c.right_bottom()], stroke);
+        painter.line_segment([c.right_top(), c.left_bottom()], stroke);
+    }
+}
+
 /// What its key or menu item still runs while a field has the keyboard: commands
 /// that leave the selection be. The rest are the field's (Ctrl+A, Z...) or wait.
 pub fn runs_while_typing(a: Action) -> bool {
     use Action::*;
-    matches!(a, New | Open | OpenRecent(_) | Close | Save | SaveAs | Exit | Publish | TestMovie | DocumentSettings | Show(_) | About)
+    matches!(a, New | Open | OpenRecent(_) | Close | CloseAll | Save | SaveAs | Exit | Publish | TestMovie | DocumentSettings | Show(_) | About)
         || matches!(a, ZoomIn | ZoomOut | Zoom(_) | FitInWindow | ShowAll | OnionSkin)
 }
 
@@ -1852,9 +2228,9 @@ impl eframe::App for Editor {
         self.tick(&ctx);
         crate::sound::tick(self);
         // Closing the window with unsaved changes asks first, as File > Exit does.
-        if ctx.input(|i| i.viewport().close_requested()) && self.dirty && !self.closing {
+        if ctx.input(|i| i.viewport().close_requested()) && self.any_dirty() && !self.closing {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.confirm = Some(Action::Exit);
+            self.run(Action::Exit, &ctx);
         }
         // Releasing the mouse ends a drag's undo step (typing ends at focus loss).
         if ctx.input(|i| i.pointer.any_released()) && !ctx.egui_wants_keyboard_input() {
@@ -2120,6 +2496,7 @@ pub(crate) mod testkit {
 mod tests {
     use super::testkit::*;
     use super::*;
+    use egui_kittest::kittest::Queryable;
 
     #[test]
     fn opens_and_plays_a_document() {
@@ -2559,6 +2936,187 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    #[test]
+    fn each_open_document_keeps_its_own_state_and_undo() {
+        let mut h = blank();
+        let ctx = h.ctx.clone();
+        h.state_mut().tool = Tool::Rectangle;
+        mouse_drag(&mut h, (100.0, 100.0), (200.0, 150.0));
+        // Opening another document puts it in a tab of its own, in front.
+        h.state_mut().open(fixture());
+        h.run();
+        h.state_mut().set_frame(5);
+        h.state_mut().zoom_to(2.0);
+        let ed = h.state();
+        assert_eq!((ed.title.as_str(), ed.active_document(), ed.can_undo()), ("tween", 1, false));
+        assert_eq!(ed.documents(), [("Untitled-1", true), ("tween", false)]);
+
+        // Ctrl+Tab goes back to the drawing, its rectangle and its undo with it.
+        h.key_press_modifiers(Modifiers::COMMAND, Key::Tab);
+        h.run();
+        let ed = h.state();
+        assert_eq!((ed.title.as_str(), ed.all_elements().len(), ed.frame, ed.zoom), ("Untitled-1", 1, 0, 1.0));
+        h.state_mut().run(Action::Undo, &ctx);
+        assert!(h.state().all_elements().is_empty());
+
+        // And Ctrl+Shift+Tab to the tween, on the frame and zoom it was left on.
+        h.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, Key::Tab);
+        h.run();
+        let ed = h.state();
+        assert_eq!((ed.title.as_str(), ed.frame, ed.zoom, ed.can_undo()), ("tween", 5, 2.0, false));
+
+        // Closing it brings the drawing back to the front; closing that one, Home.
+        h.state_mut().run(Action::Close, &ctx);
+        assert_eq!((h.state().title.as_str(), h.state().documents().len()), ("Untitled-1", 1));
+        h.state_mut().run(Action::Close, &ctx);
+        assert_eq!(h.state().confirm, Some(Action::Close), "the undone rectangle is still a change");
+        h.state_mut().resolve(Answer::DontSave, &ctx);
+        assert!(h.state().home.shown && h.state().documents().is_empty());
+    }
+
+    #[test]
+    fn close_all_and_exit_ask_about_each_unsaved_document() {
+        let mut h = blank();
+        let ctx = h.ctx.clone();
+        h.state_mut().tool = Tool::Rectangle;
+        mouse_drag(&mut h, (100.0, 100.0), (200.0, 150.0));
+        h.state_mut().new_document(550.0, 400.0, 24.0);
+        h.run();
+        mouse_drag(&mut h, (100.0, 100.0), (200.0, 150.0));
+        h.state_mut().new_document(550.0, 400.0, 24.0);
+        h.run();
+        h.state_mut().run(Action::ShowDocument(1), &ctx);
+        assert_eq!(h.state().documents(), [("Untitled-1", true), ("Untitled-2", true), ("Untitled-3", false)]);
+
+        // Close All asks about the one in front, then the next with changes; the clean one just goes.
+        h.state_mut().run(Action::CloseAll, &ctx);
+        assert_eq!((h.state().title.as_str(), h.state().confirm), ("Untitled-2", Some(Action::CloseAll)));
+        h.state_mut().resolve(Answer::DontSave, &ctx);
+        assert_eq!((h.state().title.as_str(), h.state().confirm), ("Untitled-1", Some(Action::CloseAll)));
+        // Cancel keeps that one open.
+        h.state_mut().resolve(Answer::Cancel, &ctx);
+        assert_eq!(h.state().documents(), [("Untitled-1", true)]);
+
+        // Exit asks too, and the window closes once it's answered.
+        h.state_mut().run(Action::Exit, &ctx);
+        assert_eq!(h.state().confirm, Some(Action::Exit));
+        h.state_mut().resolve(Answer::DontSave, &ctx);
+        assert!(h.state().closing && h.state().documents().is_empty());
+    }
+
+    /// The editor with `n` new documents open, Untitled-1 to Untitled-n, the last in front.
+    fn documents_open(n: usize) -> Harness<'static, Editor> {
+        let mut h = blank();
+        for _ in 1..n {
+            h.state_mut().new_document(550.0, 400.0, 24.0);
+        }
+        h.run();
+        h
+    }
+
+    fn titles(ed: &Editor) -> Vec<String> {
+        ed.documents().into_iter().map(|(t, _)| t.to_string()).collect()
+    }
+
+    fn tab_rect(ed: &Editor, i: usize) -> Rect {
+        ed.doc_tab_rects.iter().find(|(d, _)| *d == i).map(|(_, r)| *r).expect("the tab shows")
+    }
+
+    #[test]
+    fn moving_a_tab_keeps_the_document_in_front() {
+        let mut h = documents_open(4);
+        let ed = h.state_mut();
+        ed.move_document(3, 0);
+        assert_eq!((titles(ed), ed.active_document()), (vec!["Untitled-4".into(), "Untitled-1".into(), "Untitled-2".into(), "Untitled-3".into()], 0));
+        ed.move_document(1, 3);
+        assert_eq!((titles(ed), ed.title.as_str()), (vec!["Untitled-4".into(), "Untitled-2".into(), "Untitled-3".into(), "Untitled-1".into()], "Untitled-4"));
+        let ctx = h.ctx.clone();
+        h.state_mut().run(Action::ShowDocument(3), &ctx);
+        assert_eq!(h.state().title, "Untitled-1");
+    }
+
+    #[test]
+    fn dragging_a_tab_along_the_row_moves_it() {
+        let mut h = documents_open(3);
+        let (a, c) = (tab_rect(h.state(), 0), tab_rect(h.state(), 2));
+        // Untitled-1's tab, pressed, comes to the front; dragged past Untitled-3's middle, it goes last.
+        h.hover_at(a.center());
+        h.step();
+        h.drag_at(a.center());
+        h.step();
+        for t in [0.25, 0.5, 0.75, 1.0] {
+            h.hover_at(a.center().lerp(c.center() + vec2(20.0, 0.0), t));
+            h.step();
+        }
+        h.step();
+        h.drop_at(c.center() + vec2(20.0, 0.0));
+        h.run();
+        let ed = h.state();
+        assert_eq!(titles(ed), ["Untitled-2", "Untitled-3", "Untitled-1"]);
+        assert_eq!((ed.title.as_str(), ed.active_document(), ed.tab_drag.is_none()), ("Untitled-1", 2, true));
+        // A click (no drag) only brings a tab to the front.
+        let b = tab_rect(h.state(), 0);
+        screen_click(&mut h, b.center(), Modifiers::NONE);
+        h.run();
+        assert_eq!((titles(h.state())[0].as_str(), h.state().title.as_str()), ("Untitled-2", "Untitled-2"));
+    }
+
+    #[test]
+    fn tabs_that_dont_fit_are_listed_behind_the_overflow_button() {
+        let mut h = documents_open(24);
+        let ed = h.state();
+        let shown: Vec<usize> = ed.doc_tab_rects.iter().map(|(i, _)| *i).collect();
+        assert!(shown.len() < 24 && shown.contains(&23), "the one in front shows: {shown:?}");
+        assert!(!shown.contains(&0));
+        // ">>" lists the hidden ones; picking one brings it to the front, and its tab shows.
+        h.get_by_label("More documents").click();
+        h.run();
+        h.get_by_label("Untitled-1").click();
+        h.run();
+        let ed = h.state();
+        assert_eq!((ed.title.as_str(), ed.doc_tab_rects.first().map(|(i, _)| *i)), ("Untitled-1", Some(0)));
+        // All in view once enough are closed, and the button goes.
+        let ctx = h.ctx.clone();
+        for _ in 0..20 {
+            h.state_mut().run(Action::Close, &ctx);
+        }
+        h.run();
+        assert_eq!(h.state().doc_tab_rects.len(), 4);
+        assert!(h.query_by_label("More documents").is_none());
+    }
+
+    /// Writes target/screenshots/document_tabs_overflow.png: more documents than the row
+    /// holds, the ">>" list of the hidden ones open.
+    #[test]
+    #[ignore = "needs a GPU adapter; run with --ignored"]
+    fn document_tabs_overflow_screenshot() {
+        let mut h = harness(true);
+        for _ in 0..19 {
+            h.state_mut().new_document(550.0, 400.0, 24.0);
+        }
+        h.run();
+        h.get_by_label("More documents").click();
+        h.run();
+        screenshot(&mut h, "document_tabs_overflow");
+    }
+
+    /// Writes target/screenshots/document_tabs.png: three documents open, the second in front
+    /// and the first with unsaved changes.
+    #[test]
+    #[ignore = "needs a GPU adapter; run with --ignored"]
+    fn document_tabs_screenshot() {
+        let mut h = harness(true);
+        let ctx = h.ctx.clone();
+        h.state_mut().new_document(550.0, 400.0, 24.0);
+        h.state_mut().new_document(550.0, 400.0, 24.0);
+        h.state_mut().run(Action::ShowDocument(0), &ctx);
+        h.state_mut().dirty = true;
+        h.state_mut().run(Action::ShowDocument(1), &ctx);
+        h.run();
+        assert_eq!(h.state().documents(), [("tween", true), ("Untitled-1", false), ("Untitled-2", false)]);
+        screenshot(&mut h, "document_tabs");
+    }
+
     /// Writes target/screenshots/labels.png: frame labels on the timeline and in Properties.
     #[test]
     #[ignore = "needs a GPU adapter; run with --ignored"]
@@ -2710,6 +3268,47 @@ mod tests {
         h.drop_at(at);
         h.run();
         screenshot(&mut h, "arrange_panels");
+    }
+
+    #[test]
+    fn the_transform_panel_scales_and_turns_several_objects_by_its_numbers() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = harness(false);
+        h.run();
+        h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        h.run();
+        assert!(h.state().selection.len() > 1);
+        h.state_mut().flyout = Some(crate::panels::Flyout::Transform);
+        h.run();
+        let bounds = |ed: &Editor| hit::bounds(&ed.doc, ed.timeline(), ed.frame, &ed.selection).unwrap();
+        let width = |ed: &Editor| bounds(ed).max.0 - bounds(ed).min.0;
+        let field = |h: &Harness<'_, Editor>, suffix: &str| {
+            let node = h.get_all_by_role(egui::accesskit::Role::SpinButton).find(|n| n.value().is_some_and(|v| v.ends_with(suffix))).unwrap();
+            (node.rect().center(), node.value().unwrap())
+        };
+        let before = width(h.state());
+
+        // Dragged 40 px at half a percent each, ↔ reads 120% and the selection is 1.2 times as wide.
+        let (at, value) = field(&h, "%");
+        assert_eq!(value, "100.0 %");
+        screen_drag(&mut h, at, at + vec2(40.0, 0.0), Modifiers::NONE);
+        h.run();
+        assert_eq!(field(&h, "%").1, "120.0 %");
+        let ratio = width(h.state()) / before;
+        assert!((ratio - 1.2).abs() < 0.01, "{ratio}");
+
+        // Rotate likewise reads what it turned by.
+        let (at, value) = field(&h, "°");
+        assert_eq!(value, "0.0°");
+        screen_drag(&mut h, at, at + vec2(40.0, 0.0), Modifiers::NONE);
+        h.run();
+        assert_eq!(field(&h, "°").1, "20.0°");
+
+        // Anything else changing the document starts the numbers over.
+        let ctx = h.ctx.clone();
+        h.state_mut().run(Action::Undo, &ctx);
+        h.run();
+        assert_eq!(field(&h, "°").1, "0.0°");
     }
 
     /// However narrow the Timeline, its toolbar draws no control over another
@@ -3598,7 +4197,7 @@ mod tests {
     }
 
     #[test]
-    fn a_dropped_file_asks_about_unsaved_changes_and_waits_for_dialogs() {
+    fn a_dropped_file_opens_in_a_tab_and_waits_for_dialogs() {
         let mut h = blank();
         let ctx = h.ctx.clone();
         // A dialog up keeps the window's input, drops too: Document Settings stays about its document.
@@ -3608,23 +4207,26 @@ mod tests {
         assert_eq!(h.state().title, "Untitled-1");
         h.key_press(Key::Escape);
         h.run();
-        // With unsaved changes, a drop asks first, as File > Open does.
+        // A drop opens beside the document, which keeps its unsaved changes.
         h.state_mut().tool = Tool::Rectangle;
         mouse_drag(&mut h, (100.0, 100.0), (200.0, 150.0));
         drop_file(&mut h, fixture());
         let ed = h.state();
-        assert_eq!((ed.title.as_str(), ed.all_elements().len(), ed.confirm.is_some()), ("Untitled-1", 1, true));
-        h.state_mut().resolve(Answer::Cancel, &ctx);
+        assert_eq!((ed.title.as_str(), ed.confirm), ("tween", None));
+        assert_eq!(ed.documents(), [("Untitled-1", true), ("tween", false)]);
+        // Dropped again, it comes to the front rather than opening twice.
+        h.state_mut().run(Action::ShowDocument(0), &ctx);
+        drop_file(&mut h, fixture());
+        assert_eq!((h.state().title.as_str(), h.state().documents().len()), ("tween", 2));
         // While Close asks, a drop waits too, and doesn't take Close's place.
+        h.state_mut().run(Action::ShowDocument(0), &ctx);
         h.state_mut().run(Action::Close, &ctx);
         h.run();
         drop_file(&mut h, fixture());
         assert_eq!((h.state().title.as_str(), h.state().confirm), ("Untitled-1", Some(Action::Close)));
-        h.state_mut().resolve(Answer::Cancel, &ctx);
-        h.run();
-        drop_file(&mut h, fixture());
         h.state_mut().resolve(Answer::DontSave, &ctx);
-        assert_eq!(h.state().title, "tween");
+        let ed = h.state();
+        assert_eq!((ed.title.as_str(), ed.documents().len(), ed.home.shown), ("tween", 1, false));
     }
 
     #[test]

@@ -28,7 +28,7 @@ Clean-room, open-source alternative to Adobe Animate, in Rust.
   - Sound: `sound.rs` (library sounds in `doc.sounds`, WAV and MP3 bytes as imported; a keyframe's sound via `Frame::sound`/`set_sound`, kept as its DOMFrame attributes; decoding; which sounds a timeline plays), `sound_swf.rs` (DefineSound, StartSound, a stream per timeline in ADPCM). `video.rs`: Import Video's frames through ffmpeg.
 - `apps/cli` (minnamate-cli): `render <fla|folder> --frame N`, `swf`, `html5` (HTML5 Canvas publish), the exports `image`, `gif`, `png-sequence`, `video` and `publish`, and `spritesheet --symbol NAME` (a symbol, or a library folder for all its symbols). The render command is the oracle loop: diff its PNG against Animate's PNG export of the same frame. `swf` output should play in Ruffle; the tests parse it back with the `swf` crate.
 - `apps/editor` (binary `minnamate`), egui 0.36 / eframe, laid out like Animate 2024's Essentials workspace:
-  - `app.rs`: state, actions, undo, keyboard routing, layout.
+  - `app.rs`: state, actions, undo, keyboard routing, layout. Several documents open as tabs: the one in front keeps its state in `Editor`'s fields, the others wait in `Session`s (`Editor::exchange` swaps them). The tab row (`doc_tabs`) drags tabs to reorder them and lists those that don't fit behind ">>".
   - The window's parts:
     - `home.rs`: Home screen, New Document, Document Settings.
     - `menu.rs`: app bar and menus; the menu table also defines the shortcuts.

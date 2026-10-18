@@ -229,7 +229,8 @@ pub fn panel(ui: &mut Ui, ed: &mut Editor) {
             ui.spacing_mut().item_spacing.x = 2.0;
             let title = ed.title.clone();
             crate::widgets::pick(ui, "Library document", 0, &[(0, title.as_str(), true)], ui.available_width() - 52.0);
-            // ponytail: one document at a time, so there's no other library to pin or open.
+            // ponytail: it shows the document in front's library only; Animate's lists the other
+            // open documents' too, to show one of those without switching, and Pin keeps one shown.
             theme::icon_button(ui, theme::ICON_BUTTON, false, false, "Pin current library", |p, r, c| icons::paint(p, r.shrink(3.0), Icon::Pin, c));
             theme::icon_button(ui, theme::ICON_BUTTON, false, false, "New library panel", |p, r, c| icons::paint(p, r.shrink(3.0), Icon::NewLibrary, c));
         });

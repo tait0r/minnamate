@@ -32,8 +32,7 @@ const FILE: &[Item] = &[
     Do("Open...", "Ctrl+O", Open),
     Recent,
     Do("Close", "Ctrl+W", Close),
-    // One document at a time, so closing them all is closing it.
-    Do("Close All", "Ctrl+Alt+W", Close),
+    Do("Close All", "Ctrl+Alt+W", CloseAll),
     Sep,
     Do("Save", "Ctrl+S", Save),
     Do("Save As...", "Ctrl+Shift+S", SaveAs),
@@ -663,10 +662,10 @@ fn items(ui: &mut Ui, list: &[Item], ed: &Editor, picked: &mut Option<Action>) {
                 }
             }
             Documents => {
-                if ed.home.doc_open {
-                    let title = if ed.dirty { format!("{}*", ed.title) } else { ed.title.clone() };
-                    if check_item(ui, true, &title, true) {
-                        *picked = Some(ShowDocument);
+                for (i, (title, dirty)) in ed.documents().into_iter().enumerate() {
+                    let title = if dirty { format!("{title}*") } else { title.to_string() };
+                    if check_item(ui, true, &title, i == ed.active_document()) {
+                        *picked = Some(ShowDocument(i));
                     }
                 }
             }

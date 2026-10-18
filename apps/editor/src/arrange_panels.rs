@@ -5,7 +5,7 @@
 use eframe::egui::{self, Color32, DragValue, Id, Key, Order, Painter, Rect, Response, RichText, Sense, Stroke, Ui, pos2, vec2};
 use minnamate_core::arrange::Align;
 use minnamate_core::doc::{Element, Matrix, Point};
-use minnamate_core::hit;
+use minnamate_core::hit::{self, ElementRef};
 use minnamate_core::render::render_timeline;
 
 use crate::app::{Action, Editor};
@@ -119,7 +119,13 @@ pub fn transform(ui: &mut Ui, ed: &mut Editor) {
         },
         _ => None,
     };
-    let old = lone.unwrap_or(Matrix::IDENTITY).parts();
+    // A wider selection has no matrix of its own to read the numbers back from, so the panel
+    // keeps what it applied: while the selection is the same and nothing else has changed the
+    // document since (the revision is the one its last edit left).
+    let applied_id = Id::new("transform-panel-applied");
+    let applied = ui.data(|d| d.get_temp::<(Vec<ElementRef>, u32, (f32, f32, f32, f32))>(applied_id));
+    let kept = applied.filter(|(sel, rev, _)| lone.is_none() && *sel == ed.selection && *rev == ed.rev).map(|a| a.2);
+    let old = kept.unwrap_or_else(|| lone.unwrap_or(Matrix::IDENTITY).parts());
     let (mut sx, mut sy, mut kx, mut ky) = (old.0 * 100.0, old.1 * 100.0, old.2.to_degrees(), old.3.to_degrees());
     let id = Id::new("transform-panel");
     let (mut linked, mut skewing) = ui.data(|d| d.get_temp::<(bool, bool)>(id)).unwrap_or_default();
@@ -208,8 +214,11 @@ pub fn transform(ui: &mut Ui, ed: &mut Editor) {
     if fields.iter().any(Response::changed)
         && let Some(undo) = Matrix::from_parts(old).inverse()
     {
-        let now = Matrix::from_parts((sx / 100.0, sy / 100.0, kx.to_radians(), ky.to_radians()));
-        free_transform::about_pivot(ed, now * undo, Some("transform-panel"));
+        let parts = (sx / 100.0, sy / 100.0, kx.to_radians(), ky.to_radians());
+        free_transform::about_pivot(ed, Matrix::from_parts(parts) * undo, Some("transform-panel"));
+        if lone.is_none() {
+            ui.data_mut(|d| d.insert_temp(applied_id, (ed.selection.clone(), ed.rev, parts)));
+        }
     }
     if fields.iter().any(|f| f.drag_stopped() || f.lost_focus()) {
         ed.end_gesture();

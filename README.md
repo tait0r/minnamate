@@ -36,7 +36,7 @@ The commands take a `.fla` file or an unpacked XFL folder. They print `warning: 
 ## Status
 
 - Works: shapes with solid, gradient and bitmap fills, groups, symbols (graphic, movie clip, button), classic, motion and shape tweens, masks, guides, layer folders and parenting, filters and blend modes, sound, frame scripts (stop, play, goto, trace...), scenes; publishing to SWF, HTML5 Canvas, GIF, PNG, JPEG and video; sprite sheets (Sparrow v2, Starling, JSON, cocos2D, EaselJS); in the editor, the drawing tools, selection and transforms, symbols and the Library, the timeline, Actions panel, Publish Settings, undo, Test Movie.
-- Not yet: bones, 3D, Asset Warp, input text, several documents open at once, custom workspaces.
+- Not yet: bones, 3D, Asset Warp, input text, custom workspaces.
 
 ## Development
 

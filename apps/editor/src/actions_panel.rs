@@ -27,6 +27,13 @@ pub struct State {
     typing: Option<u32>,
 }
 
+impl State {
+    /// Another document comes to the front: the pin and the playback count were this one's.
+    pub fn leave_document(&mut self) {
+        (self.pinned, self.played, self.typing) = (None, None, None);
+    }
+}
+
 // The code editor's colours, ours.
 const KEYWORD: Color32 = Color32::from_rgb(0x6C, 0xA3, 0xE8);
 const BUILTIN: Color32 = Color32::from_rgb(0x6F, 0xC3, 0xC0);
@@ -554,30 +561,28 @@ mod tests {
     }
 
     #[test]
-    fn a_canvas_document_called_off_leaves_the_next_one_be() {
+    fn a_canvas_document_leaves_the_next_one_be() {
         let mut h = Harness::builder().with_size(egui::vec2(1600.0, 900.0)).build_eframe(|cc| Editor::new(&cc.egui_ctx, None));
         h.run();
         h.get_by_label("Full HD").click();
         h.run();
         h.state_mut().dirty = true;
-        // The Ads tab makes an HTML5 Canvas document, but Cancel at "Save changes?" calls it off.
+        // The Ads tab makes an HTML5 Canvas document, in a tab beside the first.
         h.key_press_modifiers(Modifiers::COMMAND, Key::N);
         h.run();
         h.get_by_label("Ads").click();
         h.run();
         h.get_by_label("Create").click();
         h.run();
-        h.get_by_label_contains("Cancel").click();
-        h.run();
+        assert!(h.state().doc.is_canvas() && h.state().confirm.is_none());
         // Home's Full HD then makes an ActionScript 3.0 document, as ever.
         crate::home::toggle(h.state_mut());
         h.run();
         h.get_by_label("Full HD").click();
         h.run();
-        h.get_by_label_contains("Don't Save").click();
-        h.run();
         assert!(!h.state().dirty, "a new document");
         assert!(!h.state().doc.is_canvas());
+        assert_eq!(h.state().documents(), [("Untitled-1", true), ("Untitled-2", false), ("Untitled-3", false)]);
     }
 
     #[test]

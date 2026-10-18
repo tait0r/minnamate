@@ -50,6 +50,15 @@ fn main() -> eframe::Result {
     if let Ok(icon) = eframe::icon_data::from_png_bytes(include_bytes!("../../../assets/logo.png")) {
         viewport = viewport.with_icon(icon);
     }
-    let options = eframe::NativeOptions { viewport, ..Default::default() };
+    #[allow(unused_mut)]
+    let mut options = eframe::NativeOptions { viewport, ..Default::default() };
+    // winit's Wayland backend takes no file drops; XWayland does.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("DISPLAY").is_some() {
+        use winit::platform::x11::EventLoopBuilderExtX11;
+        options.event_loop_builder = Some(Box::new(|b| {
+            b.with_x11();
+        }));
+    }
     eframe::run_native("Minnamate", options, Box::new(|cc| Ok(Box::new(app::Editor::new(&cc.egui_ctx, path)))))
 }

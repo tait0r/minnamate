@@ -15,5 +15,9 @@ rfd = "0.17"
 # Sound output: DirectSound on Windows, ALSA on Linux, Core Audio on macOS.
 tinyaudio = "2"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# Only to pick X11: winit's Wayland backend takes no file drops.
+winit = { version = "0.30", default-features = false, features = ["x11"] }
+
 [dev-dependencies]
 egui_kittest = { version = "0.36", features = ["wgpu", "snapshot", "eframe"] }

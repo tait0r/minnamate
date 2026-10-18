@@ -202,7 +202,8 @@ fn transform_selection(ed: &mut Editor, m: &Matrix) {
     // A motion tween's target, inside its span, gets property keyframes instead.
     let frame = ed.frame;
     for r in ed.selection.clone() {
-        minnamate_core::motion::edit_shown(ed.timeline_mut(), r, frame, |el| transform(el, m));
+        let m = held(ed, r, m);
+        minnamate_core::motion::edit_shown(ed.timeline_mut(), r, frame, |el| transform(el, &m));
     }
 }
 
@@ -264,9 +265,9 @@ fn selected(ed: &Editor) -> Vec<(ElementRef, Element)> {
 fn own_box(ed: &Editor) -> Option<Matrix> {
     let (r, el) = lone(ed)?;
     let m = match el {
-        Element::Shape(s) => s.matrix,
+        Element::Shape(s) => rig(ed, r) * s.matrix,
         Element::Instance(_) => lone_instance(ed)?.matrix,
-        Element::Bitmap(b) => b.matrix,
+        Element::Bitmap(b) => rig(ed, r) * b.matrix,
         _ => return None,
     };
     let local = hit::bounds_through(&ed.doc, ed.timeline(), ed.frame, &[r], m.inverse()?)?;
@@ -291,13 +292,27 @@ fn lone(ed: &Editor) -> Option<(ElementRef, &Element)> {
 /// An instance keeps its own transformation point, as in Animate; a motion tween's
 /// target is where it shows.
 fn lone_instance(ed: &Editor) -> Option<Instance> {
-    match lone(ed)? {
-        (r, Element::Instance(i)) => match crate::tweens::shown_target(ed, r) {
-            Some(Element::Instance(shown)) => Some(shown),
-            _ => Some(i.clone()),
-        },
-        _ => None,
+    let (r, Element::Instance(_)) = lone(ed)? else { return None };
+    match crate::tweens::shown_target(ed, r) {
+        Some(Element::Instance(mut shown)) => {
+            shown.matrix = rig(ed, r) * shown.matrix;
+            Some(shown)
+        }
+        // Where a classic tween or its guide puts it, after its parent layer's object.
+        _ => crate::stage::shown_instance(ed, r),
     }
+}
+
+/// What layer parenting maps `r`'s layer through now: from the space its keyframe holds
+/// its objects in to the edited timeline's, where the box and the drags are.
+fn rig(ed: &Editor, r: ElementRef) -> Matrix {
+    minnamate_core::layer_motion::parenting(ed.timeline(), r.layer, ed.frame)
+}
+
+/// `m`, made in the edited timeline's coordinates, as it applies to `r` where its layer keeps it.
+fn held(ed: &Editor, r: ElementRef, m: &Matrix) -> Matrix {
+    let p = rig(ed, r);
+    p.inverse().map_or(*m, |inv| inv * *m * p)
 }
 
 /// The edited timeline's coordinates to screen points, as a matrix: what
@@ -435,11 +450,15 @@ fn update(ed: &mut Editor, g: &mut Gesture, p: Point, shift: bool, alt: bool, re
         // A motion tween's target is keyed by the step since the last update; the rest start over.
         if minnamate_core::motion::tweening(ed.timeline(), *r, frame) {
             if let Some(step) = step {
+                let step = held(ed, *r, &step);
                 minnamate_core::motion::edit_shown(ed.timeline_mut(), *r, frame, |el| transform(el, &step));
             }
-        } else if let Some(el) = ed.element_mut(*r) {
-            *el = before.clone();
-            transform(el, &m);
+        } else {
+            let m = held(ed, *r, &m);
+            if let Some(el) = ed.element_mut(*r) {
+                *el = before.clone();
+                transform(el, &m);
+            }
         }
     }
     g.rev = ed.rev;
@@ -700,6 +719,44 @@ mod tests {
         h.key_press(Key::Delete);
         move_and_release(&mut h, (a.max.0 + 60.0, a.max.1 + 40.0));
         assert_eq!(elements(&h), before[1..]);
+    }
+
+    #[test]
+    fn a_parented_symbols_transformation_point_is_where_it_shows() {
+        use minnamate_core::doc::{Extra, SymbolKind};
+        let mut h = rectangle();
+        let ed = h.state_mut();
+        let sel = ed.selection.clone();
+        minnamate_core::symbols::convert_to_symbol(&mut ed.doc, 0, 0, &sel, "Box", SymbolKind::Graphic, (100.0, 100.0)).unwrap();
+        // A parent layer above, its object a quarter turn round and off to the side.
+        let tl = ed.timeline_mut();
+        let mut parent = tl.layers[0].clone();
+        (parent.name, parent.extra) = ("Parent".into(), Extra::default());
+        let Some(Element::Instance(mut turned)) = parent.frames[0].elements.pop() else { panic!("no instance") };
+        turned.matrix = Matrix { a: 0.0, b: 1.0, c: -1.0, d: 0.0, tx: 400.0, ty: 50.0 };
+        parent.frames[0].elements = vec![Element::Instance(turned)];
+        tl.layers.insert(0, parent);
+        assert!(tl.set_rig_parent(1, Some(0)));
+        let child = ElementRef { layer: 1, keyframe: 0, element: 0 };
+        (ed.selection, ed.layer, ed.transform.kept) = (vec![child], 1, None);
+        h.run();
+        let b = picked(h.state());
+
+        // The point is in the middle of the box, where the Selection tool shows it too.
+        let t = target(h.state()).expect("a box");
+        let shown = crate::stage::shown_instance(h.state(), child).unwrap();
+        assert!(near(t.pivot, middle(b)) && near(shown.matrix.apply(shown.pivot), middle(b)), "{t:?} around {b:?}");
+
+        // Dragged from there, it lands under the pointer, and a quarter turn goes about it.
+        let to = (b.min.0 + 20.0, b.min.1 + 10.0);
+        mouse_drag(&mut h, middle(b), to);
+        let c = target(h.state()).expect("a box").pivot;
+        assert!(near(c, to), "{c:?}");
+        let ctx = h.ctx.clone();
+        h.state_mut().run(Action::Rotate90Cw, &ctx);
+        let r = picked(h.state());
+        let want = ((c.0 - (b.max.1 - c.1), c.1 + (b.min.0 - c.0)), (c.0 - (b.min.1 - c.1), c.1 + (b.max.0 - c.0)));
+        assert!(near(r.min, want.0) && near(r.max, want.1), "{r:?}, want {want:?}");
     }
 
     #[test]

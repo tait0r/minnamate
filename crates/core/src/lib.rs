@@ -27,6 +27,7 @@ pub mod script;
 pub mod shape_tween;
 pub mod sound;
 mod sound_swf;
+pub mod spritesheet;
 pub mod swf_export;
 pub mod symbols;
 pub mod text;

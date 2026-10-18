@@ -26,13 +26,16 @@ cargo run -p minnamate-cli -- render movie.fla --frame 12 -o frame.png   # one f
 cargo run -p minnamate-cli -- swf movie.fla -o movie.swf                 # SWF, plays in Ruffle
 cargo run -p minnamate-cli -- html5 movie.fla -o movie-web               # HTML5 Canvas page
 cargo run -p minnamate-cli -- gif movie.fla -o movie.gif                 # also: image, png-sequence, video (ffmpeg), publish
+cargo run -p minnamate-cli -- spritesheet movie.fla --symbol EXPORT -o sheet   # sheet.png + sheet.xml (Sparrow v2)
 ```
+
+`spritesheet` takes a symbol, or a library folder for every symbol in it, and `--format` sparrow-v2, starling, json, json-array, cocos2d-v2, cocos2d-v3 or easeljs. In the editor it's the Library's right-click Generate Sprite Sheet.
 
 The commands take a `.fla` file or an unpacked XFL folder. They print `warning: skipped …` for anything they can't handle yet.
 
 ## Status
 
-- Works: shapes with solid, gradient and bitmap fills, groups, symbols (graphic, movie clip, button), classic, motion and shape tweens, masks, guides, layer folders and parenting, filters and blend modes, sound, frame scripts (stop, play, goto, trace...), scenes; publishing to SWF, HTML5 Canvas, GIF, PNG, JPEG and video; in the editor, the drawing tools, selection and transforms, symbols and the Library, the timeline, Actions panel, Publish Settings, undo, Test Movie.
+- Works: shapes with solid, gradient and bitmap fills, groups, symbols (graphic, movie clip, button), classic, motion and shape tweens, masks, guides, layer folders and parenting, filters and blend modes, sound, frame scripts (stop, play, goto, trace...), scenes; publishing to SWF, HTML5 Canvas, GIF, PNG, JPEG and video; sprite sheets (Sparrow v2, Starling, JSON, cocos2D, EaselJS); in the editor, the drawing tools, selection and transforms, symbols and the Library, the timeline, Actions panel, Publish Settings, undo, Test Movie.
 - Not yet: bones, 3D, Asset Warp, input text, several documents open at once, custom workspaces.
 
 ## Development

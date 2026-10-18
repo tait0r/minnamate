@@ -23,10 +23,10 @@ Clean-room, open-source alternative to Adobe Animate, in Rust.
   - Editing operations: `edit.rs` (frames, layers), `draw.rs` (shape tools), `hit.rs` (hit testing, bounds), `symbols.rs`, `arrange.rs` (clipboard, group, arrange, align), `transform.rs`, `paint.rs` (bucket, ink), `erase.rs`, `pen.rs`.
   - `library.rs`: library folders (empty ones kept as DOMDocument's `<folders>` in the document's `Extra`), renaming and moving items, Duplicate, linkage. `scenes.rs`: duplicate, delete, rename, reorder scenes.
   - `button.rs`: a button's Up/Over/Down/Hit frames and hit area; `render_live` draws buttons hovered or pressed (Test Movie, Enable Simple Buttons); swf_export.rs writes DefineButton2.
-  - Publishing: `publish.rs` (PublishSettings.xml profiles, File > Publish), `export.rs` (image, animated GIF, PNG sequence, video through ffmpeg), `encode.rs` (JPEG and GIF encoders).
+  - Publishing: `publish.rs` (PublishSettings.xml profiles, File > Publish), `export.rs` (image, animated GIF, PNG sequence, video through ffmpeg), `encode.rs` (JPEG and GIF encoders), `spritesheet.rs` (Generate Sprite Sheet: symbols' frames drawn as published, trimmed, duplicates stacked, packed Basic or MaxRects into a PNG, with Sparrow v2, Starling, JSON, JSON-Array, cocos2D v2/v3 or EaselJS data; frames named `Symbol0000`).
   - Text: `text.rs` (layout, glyph outlines), `fonts.rs` (installed fonts).
   - Sound: `sound.rs` (library sounds in `doc.sounds`, WAV and MP3 bytes as imported; a keyframe's sound via `Frame::sound`/`set_sound`, kept as its DOMFrame attributes; decoding; which sounds a timeline plays), `sound_swf.rs` (DefineSound, StartSound, a stream per timeline in ADPCM). `video.rs`: Import Video's frames through ffmpeg.
-- `apps/cli` (minnamate-cli): `render <fla|folder> --frame N`, `swf`, `html5` (HTML5 Canvas publish), and the exports `image`, `gif`, `png-sequence`, `video` and `publish`. The render command is the oracle loop: diff its PNG against Animate's PNG export of the same frame. `swf` output should play in Ruffle; the tests parse it back with the `swf` crate.
+- `apps/cli` (minnamate-cli): `render <fla|folder> --frame N`, `swf`, `html5` (HTML5 Canvas publish), the exports `image`, `gif`, `png-sequence`, `video` and `publish`, and `spritesheet --symbol NAME` (a symbol, or a library folder for all its symbols). The render command is the oracle loop: diff its PNG against Animate's PNG export of the same frame. `swf` output should play in Ruffle; the tests parse it back with the `swf` crate.
 - `apps/editor` (binary `minnamate`), egui 0.36 / eframe, laid out like Animate 2024's Essentials workspace:
   - `app.rs`: state, actions, undo, keyboard routing, layout.
   - The window's parts:
@@ -36,7 +36,7 @@ Clean-room, open-source alternative to Adobe Animate, in Rust.
     - `stage.rs`: stage view, selection, rulers, guides.
     - `timeline.rs`, with `layer_tree.rs` (folder tree, mask and guide commands, parenting view).
     - `panels.rs`: Properties and the icon strip; `filters.rs`: its Filters section.
-    - `library.rs`; `symbol_dialogs.rs`: Symbol Properties, Duplicate Symbol, Swap Symbol.
+    - `library.rs`; `symbol_dialogs.rs`: Symbol Properties, Duplicate Symbol, Swap Symbol; `convert_symbol.rs`: Convert to Symbol (F8) and New Symbol; `spritesheet.rs`: the Library's Generate Sprite Sheet (on the symbols and folders selected; the Library selects several with Ctrl and Shift clicks), the sheet made in the background for its preview.
     - `publish.rs`: Publish Settings, Publish, the Doc tab's Publish section, the Export dialogs.
     - `scene_panel.rs`: Window > Scene. `buttons.rs`: a button's timeline labels, Enable Simple Buttons.
     - `arrange_panels.rs`: Align, Transform, Info.

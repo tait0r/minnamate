@@ -25,6 +25,7 @@ mod pen;
 mod publish;
 mod scene_panel;
 mod sound;
+mod spritesheet;
 mod stage;
 mod symbol_dialogs;
 mod test_movie;

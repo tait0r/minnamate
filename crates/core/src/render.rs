@@ -98,6 +98,17 @@ pub fn render_timeline_live(
     Ok((r.pixmap, r.skipped))
 }
 
+/// `frame` of any timeline of `doc` as published (hidden layers in, guides out, masks at work)
+/// onto a transparent `width` × `height` pixel canvas, `matrix` mapping the timeline's
+/// coordinates to its pixels. Sprite sheets draw symbols with it.
+pub fn render_published(doc: &Document, tl: &Timeline, frame: u32, matrix: &Matrix, (width, height): (u32, u32)) -> Result<(Pixmap, BTreeSet<String>)> {
+    let pixmap = Pixmap::new(width, height).ok_or("bad canvas size")?;
+    let zoom = (matrix.a * matrix.d - matrix.b * matrix.c).abs().sqrt();
+    let mut r = Renderer { doc, pixmap, skipped: BTreeSet::new(), shown_only: false, only: None, masking: false, zoom, layers: Vec::new(), under: None, clips: None, live: None };
+    r.timeline(tl, frame, transform(matrix), ColorTransform::IDENTITY, 0);
+    Ok((r.pixmap, r.skipped))
+}
+
 /// `render_timeline` drawing layer `layer` of `tl` alone, its links to other layers still at
 /// work: its mask, guide and parent. The editor's onion skin draws the stage layer by layer.
 pub fn render_layer(

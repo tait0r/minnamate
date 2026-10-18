@@ -335,7 +335,13 @@ pub struct Editor {
     pub closed: Vec<PanelId>,
     pub first_visible_frame: f32,
     pub first_visible_layer: f32,
+    /// The Library item clicked last: the one the preview, Properties and Delete go by.
     pub library_selection: Option<String>,
+    /// The items Ctrl and Shift clicks have selected, `library_selection` among them. Ignored
+    /// once it isn't, as when something else selects one item (library::selected).
+    pub library_selected: BTreeSet<String>,
+    /// Where a Shift click's range starts: the item last clicked without Shift.
+    pub library_anchor: Option<String>,
     pub library_search: String,
     /// Library folders shown open, by path.
     pub library_open: BTreeSet<String>,
@@ -441,6 +447,8 @@ pub struct Editor {
     pub bitmaps: crate::bitmaps::State,
     /// The document's publish settings, Publish Settings and the Export dialogs.
     pub publish: crate::publish::State,
+    /// The Library's Generate Sprite Sheet, while open.
+    pub spritesheet: Option<crate::spritesheet::Dialog>,
     /// Symbol Properties, Duplicate Symbol and Swap Symbol, innermost last.
     pub symbol_dialogs: Vec<crate::symbol_dialogs::Dialog>,
     pub scene_panel: crate::scene_panel::State,
@@ -484,6 +492,8 @@ impl Editor {
             first_visible_frame: 0.0,
             first_visible_layer: 0.0,
             library_selection: None,
+            library_selected: BTreeSet::new(),
+            library_anchor: None,
             library_search: String::new(),
             library_open: BTreeSet::new(),
             library_rename: None,
@@ -550,6 +560,7 @@ impl Editor {
             home: Default::default(),
             bitmaps: Default::default(),
             publish: Default::default(),
+            spritesheet: None,
             symbol_dialogs: Vec::new(),
             scene_panel: Default::default(),
             simple_buttons: false,
@@ -624,6 +635,8 @@ impl Editor {
         self.first_visible_frame = 0.0;
         self.first_visible_layer = 0.0;
         self.library_selection = None;
+        self.library_selected.clear();
+        self.library_anchor = None;
         self.library_open.clear();
         self.library_rename = None;
         self.selection.clear();
@@ -1897,6 +1910,7 @@ impl eframe::App for Editor {
         crate::arrange_panels::show(&ctx, self);
         crate::scene_panel::show(&ctx, self);
         crate::publish::dialogs(&ctx, self);
+        crate::spritesheet::dialog(&ctx, self);
         crate::symbol_dialogs::show(&ctx, self);
         crate::home::dialogs(&ctx, self);
         crate::bitmaps::dialogs(&ctx, self);

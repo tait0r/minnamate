@@ -19,6 +19,61 @@ pub fn kind_icon(kind: SymbolKind) -> Icon {
     }
 }
 
+/// The items selected in the Library, by path: those Ctrl and Shift clicks picked, or the one
+/// item clicked last.
+pub(crate) fn selected(ed: &Editor) -> Vec<String> {
+    match &ed.library_selection {
+        Some(last) if ed.library_selected.contains(last) => ed.library_selected.iter().cloned().collect(),
+        Some(last) => vec![last.clone()],
+        None => Vec::new(),
+    }
+}
+
+fn is_selected(ed: &Editor, path: &str) -> bool {
+    match &ed.library_selection {
+        Some(last) if ed.library_selected.contains(last) => ed.library_selected.contains(path),
+        Some(last) => last == path,
+        None => false,
+    }
+}
+
+/// A click on the item at `path`: it alone is selected; with Ctrl it joins the selection or
+/// leaves it; with Shift the rows from the last item clicked without Shift to it are selected,
+/// in `order`, the rows as listed.
+fn click(ed: &mut Editor, path: &str, mods: egui::Modifiers, order: &[String]) {
+    let anchor = ed.library_anchor.clone().filter(|a| order.contains(a));
+    if mods.shift
+        && let Some(anchor) = anchor
+    {
+        let (a, b) = (order.iter().position(|p| *p == anchor), order.iter().position(|p| p == path));
+        if let (Some(a), Some(b)) = (a, b) {
+            let range = &order[a.min(b)..=a.max(b)];
+            if !mods.command {
+                ed.library_selected.clear();
+            } else {
+                ed.library_selected = selected(ed).into_iter().collect();
+            }
+            ed.library_selected.extend(range.iter().cloned());
+            ed.library_selection = Some(path.to_string());
+            return;
+        }
+    }
+    if mods.command {
+        let mut now: std::collections::BTreeSet<String> = selected(ed).into_iter().collect();
+        if !now.remove(path) {
+            now.insert(path.to_string());
+            ed.library_selection = Some(path.to_string());
+        } else {
+            ed.library_selection = now.iter().next_back().cloned();
+        }
+        ed.library_selected = now;
+    } else {
+        ed.library_selected = [path.to_string()].into();
+        ed.library_selection = Some(path.to_string());
+    }
+    ed.library_anchor = Some(path.to_string());
+}
+
 /// What a library item is: a symbol of its kind, a bitmap (bitmaps.rs) or a sound (sound.rs).
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Kind {
@@ -247,9 +302,10 @@ pub fn panel(ui: &mut Ui, ed: &mut Editor) {
     let rows = rows(ed, sort, &uses);
     let mut action = None;
     let list_h = ui.available_height() - 25.0;
+    let order: Vec<String> = rows.iter().map(|r| r.path.clone()).collect();
     egui::ScrollArea::vertical().max_height(list_h).auto_shrink(false).show(ui, |ui| {
         for row in &rows {
-            if let Some(a) = list_row(ui, ed, row, &columns, &uses) {
+            if let Some(a) = list_row(ui, ed, row, &columns, &uses, &order) {
                 action = Some(a);
             }
         }
@@ -332,20 +388,22 @@ enum Command {
     Update(String),
     /// Moves the item at the first path into the folder at the second ("" for the root).
     Move(String, String),
+    /// Generate Sprite Sheet on symbols, and folders of them (spritesheet.rs).
+    SpriteSheet(Vec<String>),
 }
 
 /// One line of the list: indent, disclosure triangle for a folder, glyph and
-/// name, then the other columns. Returns what it asks for.
-fn list_row(ui: &mut Ui, ed: &mut Editor, row: &Row, columns: &[f32], uses: &HashMap<String, usize>) -> Option<Command> {
+/// name, then the other columns. Returns what it asks for. `order` is every row's path, as listed.
+fn list_row(ui: &mut Ui, ed: &mut Editor, row: &Row, columns: &[f32], uses: &HashMap<String, usize>, order: &[String]) -> Option<Command> {
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::click_and_drag());
     if row.kind.is_some() {
         resp.dnd_set_drag_payload(Dragged(row.path.clone()));
     }
     let leaf = split(&row.path).1.to_string();
-    resp.widget_info(|| WidgetInfo::selected(WidgetType::SelectableLabel, true, ed.library_selection.as_deref() == Some(row.path.as_str()), &leaf));
+    let selected = is_selected(ed, &row.path);
+    resp.widget_info(|| WidgetInfo::selected(WidgetType::SelectableLabel, true, selected, &leaf));
     let x0 = rect.left() + 6.0 + row.depth as f32 * 14.0;
     let open = ed.library_open.contains(&row.path);
-    let selected = ed.library_selection.as_deref() == Some(row.path.as_str());
     let p = ui.painter_at(rect);
     if selected {
         p.rect_filled(rect, 0.0, theme::SELECTION);
@@ -410,7 +468,15 @@ fn list_row(ui: &mut Ui, ed: &mut Editor, row: &Row, columns: &[f32], uses: &Has
     let mut command = None;
     let on_triangle = resp.interact_pointer_pos().is_some_and(|p| triangle.contains(p));
     if resp.clicked() || resp.secondary_clicked() || resp.drag_started() {
-        ed.library_selection = Some(row.path.clone());
+        let mods = ui.input(|i| i.modifiers);
+        if resp.clicked() && !(on_triangle && row.kind.is_none()) {
+            click(ed, &row.path, mods, order);
+        } else if is_selected(ed, &row.path) {
+            // A right-click or drag on a selected item keeps the selection, for its menu.
+            ed.library_selection = Some(row.path.clone());
+        } else {
+            click(ed, &row.path, egui::Modifiers::NONE, order);
+        }
         if row.kind.is_none() && on_triangle && resp.clicked() {
             command = Some(Command::Fold(row.path.clone(), !open));
         }
@@ -489,7 +555,15 @@ fn commands(ui: &mut Ui, ed: &mut Editor, target: Option<&str>, context: bool) {
     if context {
         item(ui, "Properties...", symbol.clone().or(bitmap.clone()).map(Command::Properties));
         ui.separator();
-        greyed(&mut item, ui, &["Generate Sprite Sheet...", "Generate Texture Atlas...", "Export PNG Sequence..."]);
+        // On a selected item, every item selected; symbols, and folders holding some.
+        let picked_items = match &target {
+            Some(t) if is_selected(ed, t) => selected(ed),
+            Some(t) => vec![t.clone()],
+            None => Vec::new(),
+        };
+        let sheet: Vec<String> = picked_items.into_iter().filter(|i| !minnamate_core::spritesheet::symbols_in(&ed.doc, i).is_empty()).collect();
+        item(ui, "Generate Sprite Sheet...", (!sheet.is_empty()).then_some(Command::SpriteSheet(sheet)));
+        greyed(&mut item, ui, &["Generate Texture Atlas...", "Export PNG Sequence..."]);
         ui.separator();
         greyed(&mut item, ui, &["Export Asset...", "Save As Asset..."]);
     } else {
@@ -526,6 +600,7 @@ fn run(ed: &mut Editor, command: Command) {
         Command::Delete(path) => delete(ed, &path),
         Command::Duplicate(name) => crate::symbol_dialogs::duplicate(ed, &name, false),
         Command::Play(name) => crate::sound::preview(ed, &name),
+        Command::SpriteSheet(items) => crate::spritesheet::open(ed, &items),
         Command::NewFolder => {
             // In the selected folder, or the selected item's.
             let parent = match ed.library_selection.clone() {
@@ -680,6 +755,47 @@ mod tests {
         };
         doc.scenes[0].layers[0].frames[0].elements.push(Element::Instance(instance));
         doc
+    }
+
+    #[test]
+    fn ctrl_and_shift_clicks_select_several_items_for_a_sprite_sheet() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = blank();
+        let mut doc = library_doc();
+        for name in ["Anims/Down", "Anims/Idle", "Anims/Left", "Anims/Up"] {
+            let mut symbol = doc.library["Star"].clone();
+            symbol.timeline.name = name.into();
+            doc.library.insert(name.into(), symbol);
+        }
+        h.state_mut().load(doc, "lib".into(), None);
+        h.state_mut().right_tab = 1;
+        h.state_mut().library_open.insert("Anims".into());
+        h.run();
+        let click = |h: &mut egui_kittest::Harness<'_, Editor>, label: &str, mods: egui::Modifiers| {
+            let row = h.get_by_label(label).rect();
+            screen_click(h, pos2(row.center().x, row.center().y), mods);
+            h.run();
+        };
+        let selection = |h: &egui_kittest::Harness<'_, Editor>| selected(h.state());
+
+        click(&mut h, "Down", egui::Modifiers::NONE);
+        click(&mut h, "Left", egui::Modifiers::SHIFT);
+        assert_eq!(selection(&h), ["Anims/Down", "Anims/Idle", "Anims/Left"], "Shift selects the rows between");
+        click(&mut h, "Idle", egui::Modifiers::COMMAND);
+        click(&mut h, "Up", egui::Modifiers::COMMAND);
+        assert_eq!(selection(&h), ["Anims/Down", "Anims/Left", "Anims/Up"], "Ctrl takes one out, puts another in");
+        let picked = selection(&h);
+        run(h.state_mut(), Command::SpriteSheet(picked));
+        let d = h.state().spritesheet.as_ref().expect("the dialog opens");
+        assert_eq!(d.symbols(), ["Anims/Down", "Anims/Left", "Anims/Up"]);
+        h.state_mut().spritesheet = None;
+
+        // A plain click selects one again; so does anything else selecting an item.
+        click(&mut h, "Star", egui::Modifiers::NONE);
+        assert_eq!(selection(&h), ["Star"]);
+        click(&mut h, "Up", egui::Modifiers::COMMAND);
+        h.state_mut().library_selection = Some("Anims/Idle".into());
+        assert_eq!(selection(&h), ["Anims/Idle"]);
     }
 
     #[test]

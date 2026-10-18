@@ -66,6 +66,16 @@ pub fn bounds_through(doc: &Document, tl: &Timeline, frame: u32, elements: &[Ele
         .reduce(Rect::union)
 }
 
+/// The box around everything `frame` of `tl` draws as published (hidden layers in, guides
+/// out), strokes included. None for an empty frame.
+pub fn published_bounds(doc: &Document, tl: &Timeline, frame: u32) -> Option<Rect> {
+    unmasked(display_list(doc, tl, frame, &mut BTreeSet::new()))
+        .iter()
+        .flat_map(|p| shapes(doc, &p.item, p.matrix, 0))
+        .filter_map(|(s, m)| shape_bounds(&s, &m))
+        .reduce(Rect::union)
+}
+
 /// Moves `el` by (dx, dy) in its timeline's coordinates.
 ///
 /// Shapes move by their matrix, never their edges: XFL shapes can carry a matrix,
